@@ -1,0 +1,30 @@
+{
+  "name": "tracklet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tracklet — a simple, friendly music tracker built on Phaser 4 and the phaser-ui-canvas framework.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "api": "vite-node API/bin/tracklet-api.ts",
+    "api:server": "vite-node API/bin/tracklet-server.ts",
+    "mcp": "vite-node API/bin/tracklet-mcp.ts"
+  },
+  "dependencies": {
+    "phaser": "4.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.21",
+    "vitest": "^2.0.5"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
+  }
+}

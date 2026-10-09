@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+.env
+.env.*
+!.env.example
+# Personal music, soundfonts, and generators; not required to run Tracklet.
+/script/
+/scripts/
+/storage/
+# Local agent settings and scratch work.
+/.agents/
+/.codex/
+/.freebuff/
+/tmpdbg/
+# Internal planning notes.
+*ROADMAP*.md
+# Integration tests that require excluded, personal music libraries.
+/src/__tests__/*songs.test.ts
+/src/__tests__/noisletFixture.test.ts

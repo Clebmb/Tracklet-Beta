@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tracklet</title>
+    <style>
+      /* The framework's two pixel faces, served from public/fonts. */
+      @font-face {
+        font-family: 'Silkscreen';
+        src: url('/fonts/silkscreen.ttf') format('truetype');
+        font-display: block;
+      }
+      @font-face {
+        font-family: 'Alagard';
+        src: url('/fonts/alagard.ttf') format('truetype');
+        font-display: block;
+      }
+      /*
+        'Daydream' (DEMO cut) by DoubleGum - the wordmark face. Unlike the two
+        framework faces it is app-local, not part of phaser-ui-canvas, so it is
+        declared here and awaited explicitly in main.ts. Personal use only.
+      */
+      @font-face {
+        font-family: 'Daydream';
+        src: url('/fonts/daydream.otf') format('opentype');
+        font-display: block;
+      }
+      /*
+        'Maze' by fontalist - the app's DISPLAY face, used for the one heading
+        that is meant to be looked at rather than read (the empty pattern's
+        "NOTHING HERE YET"). App-local and awaited in main.ts for the same reason
+        Daydream is. Free for personal use.
+      */
+      @font-face {
+        font-family: 'Maze';
+        src: url('/fonts/maze.ttf') format('truetype');
+        font-display: block;
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #05050a;
+        color: #d9d3c3;
+        font-family: 'Silkscreen', monospace;
+      }
+      body { display: grid; place-items: center; }
+      #game canvas {
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+      /*
+        The boot report. Hidden until something goes wrong while the app is being
+        LOADED — see the script below.
+      */
+      #boot-error {
+        max-width: 40rem;
+        margin: 2rem;
+        padding: 1rem 1.25rem;
+        border: 2px solid #d94f4f;
+        background: #1a0d0d;
+        color: #f0c9c9;
+        font-family: 'Silkscreen', monospace;
+        font-size: 0.8rem;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      A BLANK SCREEN IS THE WORST BUG REPORT. A module that throws while it is
+      being loaded never reaches the app's own code, so nothing can draw a message
+      and the page stays the colour of the background — which is exactly what
+      Tracklet looked like the day a table was built above the constant it read.
+      This listener is installed BEFORE the app's module, so the next boot failure
+      says what it was instead of saying nothing.
+    -->
+    <div id="boot-error" hidden></div>
+    <script>
+      (function () {
+        function report(what) {
+          var box = document.getElementById('boot-error');
+          if (!box || !box.hidden) return;
+          box.hidden = false;
+          box.textContent = 'Tracklet failed to start.\n\n' + what;
+        }
+        window.addEventListener('error', function (event) {
+          // A missing font or image is a resource error with no message, and it is
+          // not a boot failure: the app runs without it.
+          if (!event || !event.message) return;
+          var where = event.filename ? '\n' + event.filename + ':' + event.lineno : '';
+          report(event.message + where);
+        });
+        window.addEventListener('unhandledrejection', function (event) {
+          report(String((event && event.reason) || 'Unknown error'));
+        });
+      })();
+    </script>
+    <div id="game"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
