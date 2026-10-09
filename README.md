@@ -2,7 +2,7 @@
   <img src="assets/readme/tracklet-logo.png" alt="Tracklet" width="400">
 </p>
 <p align="center">
-  <strong>A music tracker for the browser.</strong><br>
+  <strong>A friendly music tracker.</strong><br>
   <a href="https://caleb.website/tracklet">Open Tracklet</a> ·
   <a href="doc/01-getting-started.md">Getting started</a> ·
   <a href="doc/03-script-reference.md">Script reference</a>
