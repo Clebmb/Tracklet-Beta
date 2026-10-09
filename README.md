@@ -3,7 +3,8 @@
 </p>
 <p align="center">
   <strong>A friendly music tracker.</strong><br>
-  <a href="https://caleb.website/tracklet">Open Tracklet</a> ·
+  <a href="https://caleb.website/tracklet">Webpage</a> ·
+  <a href="https://caleb.website/tracklet/try">Open Tracklet</a> ·
   <a href="doc/01-getting-started.md">Getting started</a> ·
   <a href="doc/03-script-reference.md">Script reference</a>
 </p>
