@@ -113,12 +113,6 @@ Static hosting does not run this server. A public MCP service would need a backe
 
 See the [API guide](API/README.md) for the operations, transport details, and client configuration.
 
-## What stays out of Git
-
-`script/`, `scripts/`, `storage/`, dependencies, builds, local agent settings, scratch files, and roadmap notes are ignored. Tests tied to the excluded personal music collections are excluded from the public repository too. The user guides, script reference, API documentation, source tests, and required UI framework remain.
-
-**`.gitignore` only controls Git.** It does not stop Explorer, FTP, an upload tool, or a deployment process from copying files. A copied `.gitignore` applies to untracked files under that directory in another Git repository; it does not untrack files already committed there. Deploying only `dist/` avoids uploading the development folders in the first place.
-
 ## Documentation
 
 - [Getting started](doc/01-getting-started.md)
