@@ -10,8 +10,10 @@ import {
   STEM_FILE_EXTENSION,
   stemArchiveName,
   stemFileName,
+  stemOutFileName,
   stemPlan,
   stemRefusal,
+  stemRequests,
   stemTracks,
   songFileStem,
   songFromJson,
@@ -94,6 +96,44 @@ describe('which channels become files', () => {
       { track: 1, name: 'night-bus-01-kick-drum.wav' },
       { track: 2, name: 'night-bus-02-bass.wav' },
     ]);
+  });
+
+  it('splits a channel with declared outs into one file per bus, in bus order', () => {
+    const plan = stemPlan(song(THREE), 'night-bus', [['thump', 'click'], null, null]);
+    expect(plan).toEqual([
+      { track: 1, name: 'night-bus-01-kick-drum-thump.wav', out: { index: 0, name: 'thump' } },
+      { track: 1, name: 'night-bus-01-kick-drum-click.wav', out: { index: 1, name: 'click' } },
+      { track: 2, name: 'night-bus-02-bass.wav' },
+    ]);
+    // The renderer is asked for exactly these, in this order, so names and
+    // audio can never drift apart.
+    expect(stemRequests(plan)).toEqual([
+      { track: 1, out: 0 },
+      { track: 1, out: 1 },
+      { track: 2, out: null },
+    ]);
+  });
+
+  it('leaves mono, single-out and undeclared channels exactly as they were', () => {
+    const plain = stemPlan(song(THREE), 'night-bus');
+    expect(stemPlan(song(THREE), 'night-bus', [null, [], ['main']])).toEqual(plain);
+    expect(stemRequests(plain)).toEqual([
+      { track: 1, out: null },
+      { track: 2, out: null },
+    ]);
+    // A silent channel splits nothing, however many outs it declares.
+    expect(stemPlan(song(THREE), 'night-bus', [null, null, ['a', 'b']])).toEqual(plain);
+  });
+
+  it('names one bus from the channel file plus the bus', () => {
+    expect(stemOutFileName('night-bus', 3, 'DRUMS', 'kick')).toBe('night-bus-03-drums-kick.wav');
+    expect(stemOutFileName('s', 2, '', '')).toBe(`s-02-track-track${STEM_FILE_EXTENSION}`);
+  });
+
+  it('reads a stranger in the outs list as no outs, not a throw', () => {
+    const plain = stemPlan(song(THREE), 'night-bus');
+    expect(stemPlan(song(THREE), 'night-bus', ['thump' as unknown as string[], null, null])).toEqual(plain);
+    expect(stemPlan(song(THREE), 'night-bus', [[null as unknown as string, ''], null, null])).toEqual(plain);
   });
 
   it('leaves a silent channel out, and hands the renderer its numbers', () => {

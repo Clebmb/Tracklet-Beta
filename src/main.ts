@@ -4,6 +4,8 @@ import { readLaunchTheme } from 'phaser-ui-canvas/host';
 import { TrackerScene } from './scenes/TrackerScene';
 import { instrumentCatalog } from './model/catalog';
 import { scriptCapabilities } from './model/capabilities';
+import { loadPluginLibrary } from './pluginLibrary';
+import { pluginExample } from './plugins/manifest';
 import { pickStoredTheme, rememberTheme } from './themePrefs';
 
 /**
@@ -82,9 +84,18 @@ ui.ready.then(() => {
     // depth), what every limit is, and the closed lists a word may come from.
     // It is the reason an agent can ask the build in front of it what it speaks
     // instead of trusting a reference that may be older than the code.
-    const hook = game as unknown as { catalog: unknown; capabilities: unknown };
+    // `trackletPlugins`, never `plugins`: `game.plugins` IS Phaser's own
+    // PluginManager, and overwriting it with the installed-plugin list broke
+    // every boot (`getDefaultScenePlugins is not a function` before any scene
+    // reached `create()`). The dev hook borrows the game object, so it may
+    // only add keys the framework does not own.
+    const hook = game as unknown as { catalog: unknown; capabilities: unknown; trackletPlugins: unknown };
     hook.catalog = instrumentCatalog();
     hook.capabilities = scriptCapabilities();
+    // The plugin half of "ask the build": every installed plugin with its
+    // manifest plus one example line, so an agent acts on the running app
+    // rather than on memorized docs. See doc/11-plugins.md.
+    hook.trackletPlugins = loadPluginLibrary().map((manifest) => ({ manifest, example: pluginExample(manifest) }));
     (window as unknown as Record<string, unknown>).__tracklet = game;
   }
 });

@@ -18,6 +18,7 @@ import { ok } from '../result';
 import { schema, type ApiOperation } from '../operation';
 
 import { arpOperations } from './arp';
+import { generatorOperations } from './generator';
 import { editOperations } from './edit';
 import { exportOperations } from './export';
 import { languageOperations } from './language';
@@ -47,6 +48,7 @@ const domainOperations: ApiOperation[] = [
   ...liveOperations,
   ...recorderOperations,
   ...arpOperations,
+  ...generatorOperations,
   ...scriptOperations,
   ...libraryOperations,
   ...exportOperations,

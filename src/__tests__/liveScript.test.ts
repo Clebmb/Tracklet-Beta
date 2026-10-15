@@ -158,7 +158,7 @@ describe('the manifest publishes the two words', () => {
     expect(SCRIPT_QUICK_REFERENCE.join(' ').toLowerCase()).toContain('live');
     expect(SCRIPT_COMMANDS.find((command) => command.word === 'scene')?.example).toBe('scene A 1 2 - 4');
     expect(SCRIPT_COMMANDS.find((command) => command.word === 'live')?.example).toBe('live quantize 4');
-    expect(SCRIPT_VERSION).toBe(51);
+    expect(SCRIPT_VERSION).toBe(56);
   });
 
   it('publishes the scene and quantize limits from the model', () => {

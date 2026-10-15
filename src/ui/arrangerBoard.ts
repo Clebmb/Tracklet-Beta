@@ -28,9 +28,10 @@
 
 import {
   AUTOMATION_TARGETS,
-  AUTOMATION_TARGET_BY_ID,
+  automationTargetInfo,
   clampAutomationBar,
   clampAutomationValue,
+  pluginParamTargetKnob,
   tidyLane,
   type AutomationLane,
   type AutomationTargetId,
@@ -148,7 +149,9 @@ export function timelineXAt(bar: number, view: TimelineView): number {
  * to a value the model (or the file) would refuse.
  */
 export function laneValueAtY(target: AutomationTargetId, y: number, top: number, height: number): number {
-  const info = AUTOMATION_TARGET_BY_ID[target];
+  // The table row, or the synthetic one for a `param.<knob>` lane: a knob walks
+  // the 0..100 envelope its lane was written in, the same range the file holds.
+  const info = automationTargetInfo(target);
   if (!info) return 0;
   if (!(height > 0)) return clampAutomationValue(target, info.max);
   const fraction = 1 - ((Number.isFinite(y) ? y : top) - top) / height;
@@ -158,7 +161,7 @@ export function laneValueAtY(target: AutomationTargetId, y: number, top: number,
 
 /** The height a value sits at, the inverse of `laneValueAtY`. */
 export function laneYAtValue(target: AutomationTargetId, value: number, top: number, height: number): number {
-  const info = AUTOMATION_TARGET_BY_ID[target];
+  const info = automationTargetInfo(target);
   if (!info) return top;
   const v = clampAutomationValue(target, value);
   const span = info.max - info.min;
@@ -238,7 +241,9 @@ export function laneIndexAt(
  * The page draws one sub-row per target the song uses rather than one per target the
  * model knows, so an arranger for a song with a single `bright` lane is a single
  * line and not eleven empty ones. The order comes from `AUTOMATION_TARGETS`, so the
- * rows match the vocabulary list an author (or the docs) already reads.
+ * rows match the vocabulary list an author (or the docs) already reads — with the
+ * channel's `param.<knob>` lanes after them, in the order they were written, so a
+ * knob a lane moves is a row a person can grab.
  */
 export function laneTargetsUsed(
   lanes: readonly AutomationLane[],
@@ -248,5 +253,12 @@ export function laneTargetsUsed(
   for (const lane of lanes) {
     if (lane.track === track) used.add(lane.target);
   }
-  return AUTOMATION_TARGETS.map((target) => target.id).filter((id) => used.has(id));
+  const fixed = AUTOMATION_TARGETS.map((target) => target.id).filter((id) => used.has(id));
+  const knobs: AutomationTargetId[] = [];
+  for (const lane of lanes) {
+    if (lane.track !== track) continue;
+    if (pluginParamTargetKnob(lane.target) === null || knobs.includes(lane.target)) continue;
+    knobs.push(lane.target);
+  }
+  return [...fixed, ...knobs];
 }

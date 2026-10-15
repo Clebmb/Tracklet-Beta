@@ -39,6 +39,7 @@ import {
   clampAutomationTrack,
   isAutomationTarget,
   lanesToScript,
+  pluginParamTargetKnob,
   sortAutomationLanes,
   tidyLane,
   type AutomationLane,
@@ -164,6 +165,8 @@ import {
   clampBpm,
   clampEffects,
   clampGlide,
+  clampTrackFxAmount,
+  MAX_TRACK_FX,
   clampStrum,
   clampHold,
   clampLevel,
@@ -222,6 +225,7 @@ import {
   DEFAULT_POLY,
   clampDuck,
   clampHumanize,
+  clampPluginParamValue,
   clampPoly,
   MIN_EFFECT,
   NO_EFFECTS,
@@ -253,11 +257,13 @@ import {
   type GrooveId,
   type Song,
   type TempoPoint,
+  type TrackFx,
 } from './song';
 import { DEFAULT_SHAPE, isFilterShape, shapeFromName, shapeNames, type FilterShape } from './shape';
 import { drumFromName, drumNames, drumPitch, type DrumId } from './drum';
 import { DEFAULT_KIT, kitFromName, kitNameProblem, kitNames, KIT_IDS, sameKitName, tidyKitName, type KitName } from './kit';
 import { sampleNameProblem, tidySampleName } from './sample';
+import { parsePluginVoiceRef, pluginVoiceRef, type PluginParamValues } from '../plugins/instrument';
 import {
   clampHitVelocity,
   clampMachineBeat,
@@ -651,8 +657,56 @@ export const SCENES_SONG_FILE_VERSION = 41;
  * with no dials still writes whichever older version its other features earned.
  */
 export const ARP_SONG_FILE_VERSION = 42;
+/**
+ * A song with a PLUGIN INSTRUMENT writes version 43, the newest.
+ *
+ * The sample's reason, one reference out: an older build would drop the
+ * `plugin` key without a word and save the channel back as its built-in
+ * voice — so a part somebody pointed at a plugin would come back playing the
+ * fallback with nothing in the file to say what had been lost. The CODE is
+ * never in the file (the app holds it, like samples and soundfonts); what the
+ * version protects is the reference. A song whose channels name no plugin
+ * still writes whichever older version its other features earned.
+ */
+export const PLUGIN_SONG_FILE_VERSION = 43;
+/**
+ * A song with a PLUGIN EFFECT writes version 44, the newest.
+ *
+ * The instrument's reason, one scope over: an older build would drop the
+ * `fx` key without a word and play the channel dry — so a part somebody
+ * crushed would come back clean with nothing in the file to say what had
+ * been lost. The CODE is never in the file (the app holds it, like samples
+ * and instruments); what the version protects is the reference. A song whose
+ * channels seat no effect still writes whichever older version its other
+ * features earned.
+ */
+export const FX_SONG_FILE_VERSION = 44;
+/**
+ * A song that LOCKS its plugin versions writes version 45, the newest.
+ *
+ * The sample's reason, one list out: an older build would drop the
+ * `pluginVersions` key without a word and save the song back unlocked — so a
+ * song that knew exactly which plugin it was written against would come back
+ * unable to say whether the code in front of it is the code it means. What
+ * the version protects is the lock, not the code (which never travels in a
+ * file). A song that names no plugin writes no lock and keeps whichever
+ * older version its other features earned.
+ */
+export const PLUGIN_LOCK_SONG_FILE_VERSION = 45;
+/**
+ * A song that turns a plugin instrument's KNOBS writes version 46, the newest.
+ *
+ * The lock's reason, one map out: an older build would drop the
+ * `pluginParams` key without a word and play the channel at manifest
+ * defaults — so a part somebody voiced would come back unvoiced with nothing
+ * in the file to say what had been lost. The KNOBS are never in the file (the
+ * manifest declares them, like code); what the version protects is the values.
+ * A song whose channels turn no knob writes no key and keeps whichever older
+ * version its other features earned.
+ */
+export const PLUGIN_PARAMS_SONG_FILE_VERSION = 46;
 /** The newest file version this build understands: what OPEN reads up to. */
-export const SONG_FILE_VERSION_MAX = ARP_SONG_FILE_VERSION;
+export const SONG_FILE_VERSION_MAX = PLUGIN_PARAMS_SONG_FILE_VERSION;
 /** The extension a saved script gets. */
 export const SCRIPT_FILE_EXTENSION = '.txt';
 /** The extension a saved song gets. */
@@ -662,7 +716,7 @@ export const SONG_FILE_EXTENSION = '.json';
 export type SongFileKind = 'script' | 'json';
 
 export type SongFileParse =
-  | { ok: true; kind: SongFileKind; song: Song; settings: ScriptSettings }
+  | { ok: true; kind: SongFileKind; song: Song; settings: ScriptSettings; pluginVersions: Record<string, string> }
   | { ok: false; errors: string[] };
 
 /** How many problems a rejected file reports before it stops listing them. */
@@ -836,11 +890,15 @@ export function songToScript(song: Song, settings: ScriptSettings = { volume: nu
     // else: the file holds a reference to a sound the APP has, never the sound
     // itself, which is what keeps a song a few kilobytes of readable text.
     const sample = track.sample === null ? '' : ` sample ${track.sample}`;
+    // And which plugin instrument it names, written AS the voice word: the
+    // channel's own sound stays underneath as the fallback it plays where
+    // the plugin is missing.
+    const voice = track.plugin !== null ? ` voice ${pluginVoiceRef(track.plugin)}` : voiceScript(track.voice);
     // And the effects, only the ones that are ON — an effect at 0 is what
     // every channel in every song written before effects existed is, and writing
     // `drive 0` would be six words of promise about nothing.
     const effects = effectsScript(track);
-    lines.push(`track ${i + 1} "${scriptTitle(track.name)}"${voiceScript(track.voice)}${hold}${level}${pan}${glide}${vibrato}${strum}${robin}${touch}${drift}${verb}${echo}${duck}${groove}${humanize}${poly}${shape}${bus}${sample}${effects}`);
+    lines.push(`track ${i + 1} "${scriptTitle(track.name)}"${voice}${hold}${level}${pan}${glide}${vibrato}${strum}${robin}${touch}${drift}${verb}${echo}${duck}${groove}${humanize}${poly}${shape}${bus}${sample}${effects}`);
   });
   // A stack is written under its channel, one `layer` line per layer, and each
   // line carries only what DIFFERS from the layer below it — which is exactly
@@ -853,6 +911,25 @@ export function songToScript(song: Song, settings: ScriptSettings = { volume: nu
       const below = j === 0 ? layerFromVoice(track.voice) : track.stack[j - 1];
       lines.push(`layer ${i + 1} ${j + 2}${layerScript(layer, below)}`);
     });
+  });
+  // A seated plugin effect is its own statement, like a layer above the voice:
+  // `fx 2 com.example.bitcrush-plus 45` seats the chain in order, and a
+  // channel that seats none says nothing — which is every channel of every
+  // song written before effects could be seated.
+  song.tracks.forEach((track, i) => {
+    for (const slot of track.fx) {
+      lines.push(`fx ${i + 1} ${slot.id} ${slot.amount}`);
+    }
+  });
+  // A turned plugin knob is its own statement, like a seated effect above it:
+  // `params 2 cutoff 70` turns one toward the value, in the order the knobs
+  // were turned, and a channel that turns none says nothing — which is every
+  // channel of every song written before knobs could be turned.
+  song.tracks.forEach((track, i) => {
+    if (!track.pluginParams) return;
+    for (const [id, value] of Object.entries(track.pluginParams)) {
+      lines.push(`params ${i + 1} ${id} ${value}`);
+    }
   });
   // Mute is its own statement rather than the `off` suffix, so a channel named
   // "OFF" (or "ON") reads back as a name. Only muted channels need a line.
@@ -1122,7 +1199,17 @@ function readKey(raw: unknown, errors: string[]): SongKey | null {
  * file is read by people as much as by tools, and "steps" is the word the app
  * puts on screen.
  */
-export function songToJson(song: Song, settings: ScriptSettings = { volume: null }): string {
+/**
+ * The versions a song pins its plugins at, for the lockfile it writes.
+ *
+ * Kept OUT of the `Song` model on purpose: the lock is file metadata about
+ * the code the song was saved against, not music — a script never carries
+ * one, and the app hands the versions over at save time from the manifests
+ * it holds. An empty lock writes no key and earns no version.
+ */
+export type PluginVersionLock = Record<string, string>;
+
+export function songToJson(song: Song, settings: ScriptSettings = { volume: null }, pluginVersions: PluginVersionLock = {}): string {
   // A song that stacks layers declares the newer version, and one that does not
   // keeps writing the version it always did — so the difference between them is
   // readable off the file, and an older build refuses the stacked one outright
@@ -1251,13 +1338,35 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
   // reopen and tune would come back as a song shaped by nothing — the scenes'
   // reason, for a page's settings.
   const arped = song.arp !== null;
+  // And a song with a PLUGIN INSTRUMENT writes version 43, the newest: an older
+  // build would drop the `plugin` key without a word and save the channel back
+  // as its built-in voice — the sample's reason, for a reference to code.
+  const plugined = song.tracks.some((track) => track.plugin !== null);
+  // And a song with a SEATED PLUGIN EFFECT writes version 44, the newest:
+  // an older build would drop the `fx` key without a word and play the
+  // channel dry — the instrument's reason, for a reference to code.
+  const fxed = song.tracks.some((track) => track.fx.length > 0);
+  // And a song that LOCKS its plugin versions writes version 45, the newest:
+  // the lock is a key an older build would drop without a word.
+  const locked = Object.keys(pluginVersions).length > 0;
+  // And a song that turns a plugin instrument's KNOBS writes version 46, the
+  // newest: the values are a key an older build would drop without a word.
+  const paramed = song.tracks.some((track) => track.pluginParams !== null);
   // And a song with a CHORD LOOP writes version 28: an older build would drop it
   // and keep the cells the followers wrote, so the song that came back would have
   // the right notes and no way to write the next bar of them.
   const looped = song.progression !== null;
   const file: Record<string, unknown> = {
     format: SONG_FILE_FORMAT,
-    version: arped
+    version: paramed
+      ? PLUGIN_PARAMS_SONG_FILE_VERSION
+      : locked
+      ? PLUGIN_LOCK_SONG_FILE_VERSION
+      : fxed
+      ? FX_SONG_FILE_VERSION
+      : plugined
+      ? PLUGIN_SONG_FILE_VERSION
+      : arped
       ? ARP_SONG_FILE_VERSION
       : scened
       ? SCENES_SONG_FILE_VERSION
@@ -1316,6 +1425,11 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
           : effected ? EFFECTS_SONG_FILE_VERSION : stacked ? STACK_SONG_FILE_VERSION : SONG_FILE_VERSION,
   };
   if (settings.volume !== null) file.volume = Math.round(settings.volume * 100);
+  // The lockfile: which plugin played what when this was saved. Absent when
+  // the song names nothing to pin, which is every song written before a
+  // plugin could be named — and a version rather than another optional field
+  // for the sample's reason, one list out.
+  if (locked) file.pluginVersions = { ...pluginVersions };
   file.title = song.title;
   file.key = { root: tonicName(song.key.tonic), scale: song.key.scale };
   file.bpm = song.bpm;
@@ -1465,6 +1579,18 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
     // A channel that plays its own built-in sound names no sample, which is every
     // channel in every song written before a sample could be named.
     ...(track.sample === null ? {} : { sample: track.sample }),
+    // And the plugin instrument it names, and no key at all on a channel that
+    // names none: absent means its built-in voice, which is every file written
+    // before a plugin could be named.
+    ...(track.plugin === null ? {} : { plugin: track.plugin }),
+    // The seated plugin effects, in chain order, and no key at all on a
+    // channel that seats none: absent means dry, which is every file written
+    // before an effect could be seated.
+    ...(track.fx.length === 0 ? {} : { fx: track.fx.map((slot) => ({ id: slot.id, amount: slot.amount })) }),
+    // The plugin instrument's knob values, and no key at all on a channel
+    // that turns none: absent means manifest defaults, which is every file
+    // written before a knob could be turned.
+    ...(track.pluginParams === null ? {} : { pluginParams: { ...track.pluginParams } }),
     // The effects that are ON, and no keys at all when none of them are: a
     // channel that was never shaped writes the file it always wrote.
     ...effectFields(track),
@@ -1917,6 +2043,16 @@ export function songFromJson(text: string): SongFileParse {
     // file that name means is the app's business, and the engine falls back to
     // the built-in one-shot when there is no such file.
     track.sample = source.sample;
+    // The plugin instrument it named, if it named one. Nothing is resolved here:
+    // which code that id means is the app's business, and the engine falls back
+    // to the channel's built-in voice when there is no such plugin.
+    track.plugin = source.plugin;
+    // A copy rather than the reader's own array, so a later edit to the song can
+    // never reach back into what the file parsed.
+    track.fx = source.fx.map((slot) => ({ ...slot }));
+    // A copy rather than the reader's own object, so a later edit to the song
+    // can never reach back into what the file parsed.
+    track.pluginParams = source.pluginParams === null ? null : { ...source.pluginParams };
     // A copy rather than the reader's own array, so a later edit to the song can
     // never reach back into what the file parsed.
     track.stack = source.stack.map((layer) => ({ ...layer }));
@@ -1974,7 +2110,26 @@ export function songFromJson(text: string): SongFileParse {
     kind: 'json',
     song,
     settings: { volume: volume === null ? null : Math.max(0, Math.min(1, volume / 100)) },
+    pluginVersions: readPluginVersions(raw.pluginVersions),
   };
+}
+
+/**
+ * The lockfile off a file, leniently: what is an object of version strings
+ * stays, everything else is dropped rather than refusing a good song.
+ *
+ * A lock is metadata ABOUT the music, never the music — a hand-edited file
+ * that mangles it still opens and plays, and the migration notices say what
+ * the mangling cost. That is the sample's bargain one scope out: the song is
+ * never held hostage by the list of what it was saved against.
+ */
+function readPluginVersions(raw: unknown): Record<string, string> {
+  if (!isRecord(raw)) return {};
+  const locked: Record<string, string> = {};
+  for (const [id, version] of Object.entries(raw)) {
+    if (typeof version === 'string' && version.trim() !== '') locked[id] = version;
+  }
+  return locked;
 }
 
 /**
@@ -2220,6 +2375,33 @@ interface JsonTrack {
    * machine, which is exactly the case the fallback exists for.
    */
   sample: string | null;
+  /**
+   * The plugin instrument this channel names, or `null` for its built-in sound.
+   *
+   * A REFERENCE, deliberately NOT looked up against anything: the plugin library
+   * belongs to the app, not to the file, so an id this machine has no code for
+   * is not a broken file — it is a song written on another machine, which is
+   * exactly the case the fallback exists for.
+   */
+  plugin: string | null;
+  /**
+   * The seated plugin effects, in chain order. Empty when the file seats none.
+   *
+   * REFERENCES, deliberately NOT looked up against anything: the plugin library
+   * belongs to the app, not to the file, so an id this machine has no code for
+   * is not a broken file — it is a song written on another machine, which the
+   * engine plays dry for that slot.
+   */
+  fx: TrackFx[];
+  /**
+   * The plugin instrument's knob values, or `null` when the file turns none.
+   *
+   * VALUES, deliberately NOT looked up against anything: the manifest belongs
+   * to the app, not to the file, so a knob this machine's manifest lacks is
+   * not a broken file — it is a song written against another minor, which the
+   * engine coerces when the note plays.
+   */
+  pluginParams: PluginParamValues | null;
   /** The channel's effects, already range-checked: off when the file is silent. */
   effects: ChannelEffects;
 }
@@ -2429,6 +2611,84 @@ function readTracks(value: unknown, errors: string[], buses: readonly Bus[]): Js
       }
       sample = tidySampleName(entry.sample as string);
     }
+    // Which plugin instrument the channel names. Optional, absent on every file
+    // written before one could be named, and checked for SPELLING and not
+    // against a list — the sample's reason exactly: the plugin library is the
+    // APP's, so an id this machine has no code for is a song written on another
+    // machine, which the engine plays on the channel's built-in voice.
+    let plugin: string | null = null;
+    if (entry.plugin !== undefined && entry.plugin !== null) {
+      const id = typeof entry.plugin === 'string' ? parsePluginVoiceRef(`plugin:${entry.plugin}`) : null;
+      if (id === null) {
+        errors.push(`${where}'s "plugin" must be a plugin id like "com.example.supersaw"; got ${JSON.stringify(entry.plugin)}.`);
+        return null;
+      }
+      plugin = id;
+    }
+    // The seated plugin effects, in chain order. Optional, absent on every file
+    // written before one could be seated — which is additive, and plays dry.
+    // An id this machine has no code for is kept, not refused: the library is
+    // the app's, so the slot plays dry here and the reference survives a save.
+    // A malformed slot IS refused, because a chain that silently drops an entry
+    // would reorder what follows it.
+    let fx: TrackFx[] = [];
+    if (entry.fx !== undefined && entry.fx !== null) {
+      if (!Array.isArray(entry.fx)) {
+        errors.push(`${where}'s "fx" must be an array like [{"id": "com.example.bitcrush-plus", "amount": 45}].`);
+        return null;
+      }
+      if (entry.fx.length > MAX_TRACK_FX) {
+        errors.push(`${where} seats ${entry.fx.length} plugin effects, but a channel may seat at most ${MAX_TRACK_FX}. Remove one and load again.`);
+        return null;
+      }
+      const seen = new Set<string>();
+      for (const slot of entry.fx) {
+        if (!isRecord(slot) || typeof slot.id !== 'string' || parsePluginVoiceRef(`plugin:${slot.id}`) === null) {
+          errors.push(`${where}'s "fx" seats {"id", "amount"} pairs, e.g. {"id": "com.example.bitcrush-plus", "amount": 45}; got ${JSON.stringify(slot)}.`);
+          return null;
+        }
+        if (seen.has(slot.id)) {
+          errors.push(`${where} seats "${slot.id}" twice. A chain seats each effect once; remove one and load again.`);
+          return null;
+        }
+        seen.add(slot.id);
+        const amount = numberOf(slot.amount);
+        if (amount === null) {
+          errors.push(`${where}'s "${slot.id}" amount must be a percentage 0..100, e.g. 45; got ${JSON.stringify(slot.amount)}.`);
+          return null;
+        }
+        fx.push({ id: slot.id, amount: clampTrackFxAmount(amount) });
+      }
+    }
+    // The plugin instrument's knob values. Optional, absent on every file
+    // written before one could be turned — which is additive, and plays at
+    // manifest defaults. A knob no manifest declares is kept, not refused:
+    // the values are the song's, so they survive a save on a machine whose
+    // minor never had that knob. A malformed map IS refused, because values
+    // that silently vanished would unvoice a part with nothing to say so —
+    // while a single number past the envelope only meant "as far as it goes",
+    // and is clamped, the voice knobs' bargain exactly.
+    let pluginParams: PluginParamValues | null = null;
+    if (entry.pluginParams !== undefined && entry.pluginParams !== null) {
+      if (!isRecord(entry.pluginParams)) {
+        errors.push(`${where}'s "pluginParams" must be an object like {"cutoff": 70}, e.g. {"cutoff": 70, "decay": 45}.`);
+        return null;
+      }
+      const values: PluginParamValues = {};
+      for (const [id, value] of Object.entries(entry.pluginParams)) {
+        if (pluginParamTargetKnob(`param.${id}`) === null) {
+          errors.push(`${where}'s "pluginParams" names knobs as lowercase words, e.g. {"cutoff": 70}; got ${JSON.stringify(id)}.`);
+          return null;
+        }
+        const at = numberOf(value);
+        if (at === null) {
+          errors.push(`${where}'s "${id}" value must be a number 0..100, e.g. 70; got ${JSON.stringify(value)}.`);
+          return null;
+        }
+        values[id] = clampPluginParamValue(at);
+      }
+      if (Object.keys(values).length > 0) pluginParams = values;
+    }
     // The filter's shape. Optional, absent on every file written before it, and
     // REFUSED rather than dropped when it names something this build does not
     // know: falling back to the low-pass would play a different instrument from
@@ -2461,7 +2721,7 @@ function readTracks(value: unknown, errors: string[], buses: readonly Bus[]): Js
       touch: clampTouch(touch ?? DEFAULT_TOUCH),
       drift: clampDrift(drift ?? DEFAULT_DRIFT),
       verb: clampSend(verb), echo: clampSend(echo), duck: clampDuck(duck), effects,
-      groove, humanize: clampHumanize(humanize), poly: clampPoly(poly), sample,
+      groove, humanize: clampHumanize(humanize), poly: clampPoly(poly), sample, plugin, fx, pluginParams,
       shape: isFilterShape(shape) ? shape : DEFAULT_SHAPE,
       bus,
     });
@@ -2665,7 +2925,7 @@ function readAutomation(value: unknown, channels: number, errors: string[]): Aut
     }
     const target = entry.target;
     if (typeof target !== 'string' || !isAutomationTarget(target)) {
-      errors.push(`${where} needs a "target" a lane can move: ${AUTOMATION_TARGET_WORDS.join(', ')}. Got ${JSON.stringify(target)}.`);
+      errors.push(`${where} needs a "target" a lane can move: ${AUTOMATION_TARGET_WORDS.join(', ')}, or "param.<knob>" for a plugin knob (e.g. "param.cutoff"). Got ${JSON.stringify(target)}.`);
       return [];
     }
     const bars = entry.bars;
@@ -3178,7 +3438,7 @@ export function parseSongFile(text: string): SongFileParse {
   if (!result.ok) {
     return { ok: false, errors: result.errors.map((error) => `line ${error.line}: ${error.message}`) };
   }
-  return { ok: true, kind: 'script', song: result.song, settings: result.settings };
+  return { ok: true, kind: 'script', song: result.song, settings: result.settings, pluginVersions: {} };
 }
 
 // --- names ------------------------------------------------------------------

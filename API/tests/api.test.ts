@@ -66,7 +66,7 @@ describe('the registry', () => {
     for (const operation of OPERATIONS) {
       expect(operation.summary.length).toBeGreaterThan(10);
       expect(operation.title.length).toBeGreaterThan(0);
-      expect(['language', 'song', 'script', 'library', 'export', 'machine', 'arranger', 'live', 'recorder', 'arp', 'workspace', 'meta']).toContain(operation.category);
+      expect(['language', 'song', 'script', 'library', 'export', 'machine', 'arranger', 'live', 'recorder', 'arp', 'generator', 'workspace', 'meta']).toContain(operation.category);
       expect(operation.input.type).toBe('object');
       expect(operation.example).toBeTypeOf('object');
     }

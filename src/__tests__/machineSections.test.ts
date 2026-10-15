@@ -21,6 +21,10 @@ import {
   MACHINE_SECTION_BAR_SONG_FILE_VERSION,
   SCENES_SONG_FILE_VERSION,
   ARP_SONG_FILE_VERSION,
+  PLUGIN_SONG_FILE_VERSION,
+  FX_SONG_FILE_VERSION,
+  PLUGIN_LOCK_SONG_FILE_VERSION,
+  PLUGIN_PARAMS_SONG_FILE_VERSION,
   SONG_FILE_VERSION_MAX,
   applyScript,
   createSong,
@@ -90,9 +94,13 @@ describe('the file says a section names a machine bar', () => {
     const json = songToJson(song);
     expect(JSON.parse(json).version).toBe(MACHINE_SECTION_BAR_SONG_FILE_VERSION);
     // A section's machine bar is 40; the LIVE page's SCENES claimed 41 above it,
-    // and the ARP page's DIALS claimed 42, so the scenes are one below the ceiling
-    // now rather than at it.
-    expect(ARP_SONG_FILE_VERSION).toBe(SONG_FILE_VERSION_MAX);
+    // and the ARP page's DIALS claimed 42, a PLUGIN INSTRUMENT claimed 43, a SEATED PLUGIN EFFECT claimed 44,
+    // a LOCKFILE 45 and TURNED PLUGIN KNOBS 46, so the dials are four below the ceiling now rather than at it.
+    expect(PLUGIN_PARAMS_SONG_FILE_VERSION).toBe(SONG_FILE_VERSION_MAX);
+    expect(PLUGIN_LOCK_SONG_FILE_VERSION).toBe(PLUGIN_PARAMS_SONG_FILE_VERSION - 1);
+    expect(FX_SONG_FILE_VERSION).toBe(PLUGIN_LOCK_SONG_FILE_VERSION - 1);
+    expect(PLUGIN_SONG_FILE_VERSION).toBe(FX_SONG_FILE_VERSION - 1);
+    expect(ARP_SONG_FILE_VERSION).toBe(PLUGIN_SONG_FILE_VERSION - 1);
     expect(SCENES_SONG_FILE_VERSION).toBe(ARP_SONG_FILE_VERSION - 1);
     expect(MACHINE_SECTION_BAR_SONG_FILE_VERSION).toBe(SCENES_SONG_FILE_VERSION - 1);
 

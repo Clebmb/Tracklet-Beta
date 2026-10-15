@@ -222,6 +222,53 @@ export function placeLiveNote(song: Song, step: number, track: number, midi: num
   return changed;
 }
 
+// ── controllers turning plugin knobs ──────────────────────────────────────────
+
+/**
+ * The first controller that turns a plugin knob, and how many knobs are covered.
+ *
+ * Controllers 16–23 are the general-purpose knobs and sliders on most
+ * keyboards, and they collide with nothing the app already honours: not the
+ * mod wheel (1), volume (7) or pan (10), not sustain (64), and not the
+ * all-notes-off panic (123). Eight slots cover every manifest in the bundle
+ * with room for a bigger one; a channel whose instrument has fewer knobs
+ * simply leaves the high slots unspent.
+ */
+export const MIDI_CC_KNOB_BASE = 16;
+export const MIDI_CC_KNOB_COUNT = 8;
+
+/**
+ * Which plugin knob (in manifest declaration order) a controller turns, or
+ * null when it turns none.
+ *
+ * A pure table lookup, so a device that sends volume or sustain changes the
+ * mix the way it always has and never a knob: only 16–23 arrive as an index.
+ * Non-integers are refused rather than floored, because a controller number is
+ * exact by construction and a fractional one is a caller bug, not a knob.
+ */
+export function midiCcKnobIndex(controller: number): number | null {
+  if (!Number.isInteger(controller)) return null;
+  const index = controller - MIDI_CC_KNOB_BASE;
+  if (index < 0 || index >= MIDI_CC_KNOB_COUNT) return null;
+  return index;
+}
+
+/**
+ * A controller value (0..127) as a knob value between its manifest range.
+ *
+ * Linear, like `velocityFromMidi`'s scaling the other way round: 0 lands on
+ * the minimum, 127 on the maximum, and everything between rounds to the
+ * nearest whole knob step — knobs are integers everywhere else (`params`
+ * refuses fractions), so a controller must not smuggle one in. Garbage in the
+ * value clamps the `clampRaw` way rather than throwing, because a device that
+ * sends a wild byte costs the tweak, never the song.
+ */
+export function midiCcToKnobValue(value: number, min: number, max: number): number {
+  const step = clampRaw(value);
+  const scaled = min + (step / 127) * (max - min);
+  return Math.min(max, Math.max(min, Math.round(scaled)));
+}
+
 // ── the one control: off, listen, record ────────────────────────────────────
 
 /**
@@ -256,9 +303,9 @@ export function midiModeLabel(mode: MidiMode): string {
 export function midiModeAbout(mode: MidiMode): string {
   switch (mode) {
     case 'listen':
-      return 'What you play sounds on the selected channel. Nothing is written.';
+      return 'What you play sounds on the selected channel. Controllers 16 to 23 turn its plugin instrument\u2019s knobs. Notes are not written.';
     case 'record':
-      return 'What you play sounds AND lands in the bar the playhead is on, on the selected channel, while the song runs.';
+      return 'What you play sounds AND lands in the bar the playhead is on, on the selected channel, while the song runs. Controllers 16 to 23 turn its plugin instrument\u2019s knobs.';
     default:
       return 'The app does not ask the browser for a MIDI input.';
   }

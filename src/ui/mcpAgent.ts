@@ -45,6 +45,13 @@ import {
 /** How long to wait for an answer before calling it unreachable. */
 export const AGENT_PROBE_TIMEOUT_MS = 1500;
 
+export const TRACKLET_REPOSITORY_URL = 'https://github.com/Clebmb/Tracklet-Beta';
+
+/** Only the official website is restricted; independent installations keep setup. */
+export function isHostedTracklet(hostname: string): boolean {
+  return ['caleb.website', 'www.caleb.website'].includes(hostname.toLowerCase());
+}
+
 /** The three things the panel can be showing. */
 export type AgentStatus = 'checking' | 'running' | 'unreachable';
 

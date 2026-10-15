@@ -10,6 +10,7 @@ import {
   AGENT_STDIO_LABEL,
   AGENT_STEPS,
   AGENT_SURFACE,
+  isHostedTracklet,
   agentEndpoint,
   agentHealthUrl,
   agentHttpConfigLines,
@@ -33,6 +34,16 @@ import {
 } from '../../API/src/identity';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+describe('official hosted MCP notice', () => {
+  it('recognizes the official site without disabling independent installations', () => {
+    expect(isHostedTracklet('caleb.website')).toBe(true);
+    expect(isHostedTracklet('www.caleb.website')).toBe(true);
+    for (const host of ['localhost', '127.0.0.1', '[::1]', 'music.example.com', 'caleb.website.example.com']) {
+      expect(isHostedTracklet(host)).toBe(false);
+    }
+  });
+});
 
 /** A fake `Response`, so the probe is checked without a server. */
 function fakeResponse(body: unknown, ok = true, status = 200): Response {

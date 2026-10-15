@@ -13,7 +13,7 @@ value.
 
 ## The diagnostics
 
-### `unknown command "<word>". Commands are: new, start, song, key, tempo, octave, beat, steps, grid, meter, tuning, swing, groove, kit, chip, volume, reverb, echo, master, automate, section, arrange, progression, bus, theme, instrument, solo, chords, hear, tracks, track, sample, layer, mute, unmute, pattern, order, clear, copy, rows, note, chord, drum, erase.`
+### `unknown command "<word>". Commands are: new, start, song, key, tempo, octave, beat, steps, grid, meter, tuning, swing, groove, kit, chip, volume, reverb, echo, master, automate, section, arrange, progression, bus, theme, instrument, solo, chords, hear, tracks, track, sample, layer, fx, mute, unmute, pattern, order, clear, copy, rows, note, chord, generate, drum, erase.`
 
 A line's first word is not a command word, so the line was read as a **grid row**
 — and then rejected because one of its tokens is not a valid cell either.
@@ -695,10 +695,26 @@ page arp
 ```
 
 **Fix:** use a name from the list the message prints — `tracker`, `machine`,
-`mixer`, `arranger`, `live` or `recorder`. A page this build does not have is
+`mixer`, `arranger`, `live` or `recorder` — or `page plugin:<id>` for a plugin
+panel. A page this build does not have is
 refused here rather than switching to a screen that is not there, which is why
 `page arp` fails until that screen lands. A page is a view of the song, not the
 song itself: a session setting, so it is never written to a file.
+
+### `"<x>" is not a panel reference. Write "page plugin:<id>" with the panel's id, e.g. "page plugin:com.example.meter-panel".`
+
+The word after `page` starts with `plugin:` but names nothing well-formed — an
+empty id, a space, or a second prefix. A panel reference is one word, like an
+effect id, because the overlay is opened one panel at a time.
+
+```
+page plugin:
+page plugin:com.example.meter-panel
+```
+
+**Fix:** write `page plugin:<id>` with the panel's id. An id this machine has
+no code for still parses — the tracker stays up with a notice naming the id,
+the voice-plugin bargain one scope over.
 
 ### `page needs one name, e.g. page arranger. Pages: …`
 
@@ -2027,6 +2043,169 @@ layer 1 2 detune -9
 **Fix:** give it a value. On a `layer` line the words take `wave <shape>`,
 `octave <-4..4>`, `detune <-100..100>` and `gain <0..100>`.
 
+### `fx takes a channel number first, e.g. "fx 1 com.example.bitcrush-plus 45". Channels are 1..<t>; got "<x>". Use "tracks N" first to add channels.`
+
+An `fx` line is addressed by channel first — like `layer`, which names a channel
+and then a layer of it — and the channel is not one the song has at that line.
+Like `track`, the count is the one the script has reached so far.
+
+```
+tracks 2
+fx 4 com.example.bitcrush-plus 45       # the song has two channels
+```
+
+**Fix:** use a channel number `1`..`<t>`, or write `tracks N` above the line.
+
+### `fx seats an effect on a channel: "fx <t> com.example.bitcrush-plus 45" (0 is off, 100 is fully wet), "fx <t> <id> clear" to take one off, or "fx <t> clear" to take the chain off.`
+
+The `fx` line is missing its effect, its amount, or both. Seating is three
+words — which channel, which effect, how much — because a chain is an order and
+an order has to name what goes in it.
+
+```
+fx 1                        # which effect, and how much?
+fx 1 com.example.bitcrush-plus 45
+```
+
+**Fix:** write all three, an `… <id> clear` to take one slot off, or a bare
+`clear` to take the chain off.
+
+### `an effect id is one word, e.g. "com.example.bitcrush-plus"; got "<x>".`
+
+The id holds a space, so it arrived as two words. An effect id is one token —
+reverse-DNS like `com.example.bitcrush-plus` — because the chain is written one
+slot per line and a line is split on spaces.
+
+**Fix:** write the id as one word.
+
+### `an insert amount is a percentage 0..100; got "<x>". 0 is off, 100 is fully wet.`
+
+The amount is missing, is not a number, or is past the range every insert
+shares — the built-in effects' own `0` means off.
+
+```
+fx 1 com.example.bitcrush-plus loud      # how much?
+fx 1 com.example.bitcrush-plus 45
+```
+
+**Fix:** write `0`..`100`. Both ends are real sounds: `0` is seated but silent,
+`100` is fully wet.
+
+### `channel <t> already seats 4 plugin effects. Take one off first: "fx <t> <id> clear".`
+
+The chain is full: four inserts, in order. A fifth id is refused rather than
+dropped, because dropping it would play a song missing an effect with nothing in
+the refusal to say which one.
+
+**Fix:** take one off (`fx <t> <id> clear`), retune one the chain already seats,
+or put the extra effect on another channel.
+
+### `fx seats one effect per line: "fx <t> <id> 45". Got an extra "<x>".`
+
+Four words where three belong. Seating is one slot per line, so a second amount
+(or a second id) is a second instruction.
+
+**Fix:** write one `fx` line per slot.
+
+### `"<clear|remove|off>" takes nothing after it: write "fx <t> clear" on a line of its own.`
+
+`clear` (or its aliases `remove` and `off`) was written with something after it.
+Taking a slot — or the whole chain — off is the whole line or nothing, the way
+`layer <t> <l> clear` is.
+
+```
+fx 1 clear 45                          # clear is the whole line
+fx 1 clear                             # ...this is the line
+fx 1 com.example.bitcrush-plus clear   # one slot off
+```
+
+**Fix:** write `clear` (or `remove`) alone, after the channel — or after the
+channel and the id for one slot.
+
+### `params takes a channel number first, e.g. "params 1 cutoff 70". Channels are 1..<t>; got "<x>". Use "tracks N" first to add channels.`
+
+Like `track`, the count is the one the script has reached so far.
+
+```
+tracks 2
+params 4 cutoff 70       # the song has two channels
+```
+
+**Fix:** use a channel number `1`..`<t>`, or write `tracks N` above the line.
+
+### `params turns one knob per line: "params <t> cutoff 70" (0..100), "params <t> <knob> clear" to take one off, or "params <t> clear" to take them off.`
+
+The `params` line is missing its knob, its value, or both. Turning is three
+words — which channel, which knob, how far — because a value has to land on a
+knob to mean anything.
+
+```
+params 1                        # which knob, and how far?
+params 1 cutoff 70
+```
+
+**Fix:** write all three, a `… <knob> clear` to take one knob back to its
+default, or a bare `clear` to take every override off.
+
+### `a knob id is one lowercase word, e.g. "cutoff"; got "<x>".`
+
+The id holds a space, a capital, or something else no manifest would accept as
+a param id. A knob id is one lowercase word starting with a letter — the shape
+the manifest demands — because the value is coerced against the manifest when
+the note plays, and a name no manifest could declare would never match a knob.
+
+**Fix:** write the id as one lowercase word.
+
+### `a knob value is 0..100; got "<x>".`
+
+The value is missing, is not a number, or is past the envelope every knob
+shares — the built-in knobs' own `0..100`.
+
+```
+params 1 cutoff loud      # how far?
+params 1 cutoff 70
+```
+
+**Fix:** write `0`..`100`. The lane's range is the envelope every manifest
+range sits inside; the engine coerces the value against the knob's own range
+when the note plays.
+
+### `params turns one knob per line: "params <t> <knob> 70". Got an extra "<x>".`
+
+Four words where three belong. Turning is one knob per line, so a second value
+(or a second knob) is a second instruction.
+
+**Fix:** write one `params` line per knob.
+
+### `"<clear|remove|off>" takes nothing after it: write "params <t> [<knob>] clear" on a line of its own.`
+
+`clear` (or its aliases `remove` and `off`) was written with something after
+it. Taking one knob — or every override — back to its default is the whole
+line or nothing, the way `fx <t> <id> clear` is.
+
+```
+params 1 clear 70                          # clear is the whole line
+params 1 clear                             # ...this is the line
+params 1 cutoff clear                      # one knob back to its default
+```
+
+**Fix:** write `clear` (or `remove`) alone, after the channel — or after the
+channel and the knob for one.
+
+### `fx is a statement of its own, on its own line: "fx <t> com.example.bitcrush-plus 45" seats that effect on channel <t> (0 is off, 100 is fully wet).`
+
+`fx` was written where a `track` line's settings go. Like `layer`, it is a
+statement about what is stacked on a channel rather than a setting of the
+channel, so it gets its own line.
+
+```
+track 1 fx 45            # which effect?
+fx 1 com.example.bitcrush-plus 45
+```
+
+**Fix:** move it onto its own line. To name a channel FX, quote it:
+`track 1 "FX" voice pad`.
+
 ### A word a `track` line does not take
 
 `pan`, `glide`, `vibrato`, `verb`, `echo`, `gain`, `octave`, `detune` and `layer`
@@ -2052,6 +2231,7 @@ layer you meant to move.
 <octave|detune> is not a track setting: a voice is always in tune, and where the TRACK plays is written in its notes. Stack a layer and move that instead, e.g. "layer <t> 2 octave 1".
 gain is a LAYER's level inside the instrument. For how loud the channel sits in the mix, write "level 60"; for a layer above the voice, "layer <t> 2 gain 40".
 layer is a statement of its own, on its own line: "layer <t> 2 wave saw" is the second layer of channel <t>. Write "tracks <t>" first if the song has fewer channels.
+fx is a statement of its own, on its own line: "fx <t> com.example.bitcrush-plus 45" seats that effect on channel <t> (0 is off, 100 is fully wet).
 pan needs a place between the speakers, e.g. "pan L40", "pan R40", "pan -40", "pan 40" or "pan C" for centre. To name a channel PAN, quote it: track <t> "PAN" wave sine.
 glide needs a percentage 0..100, e.g. "glide 40" (0 is none, 100 slides for the whole note). To name a channel GLIDE, quote it: track <t> "GLIDE" wave sine.
 vibrato needs a percentage 0..100, e.g. "vibrato 30" (0 is steady). To name a channel VIBRATO, quote it: track <t> "VIBRATO" wave sine.
@@ -2644,6 +2824,142 @@ arp rate 1.5
 
 **Fix:** `arp octaves 2 rate 2`.
 
+## The generators
+
+### `generate takes a generator and what to write: "generate euclid pad 1 5" spreads five hits over the machine's steps on a pad, or "generate bass 0 2" hangs a bassline on the song's loop from row 0 on channel 2.`
+
+A bare `generate` with nothing after it. A generator is named first — which
+composer — and then what it writes, because a rhythm and a bassline are
+different instructions that happen to share a word.
+
+```
+generate
+```
+
+**Fix:** write `generate euclid pad 1 5` for a rhythm, or `generate bass 0 2`
+for a bassline.
+
+### `"<x>" is not a generator. The generators are: euclid, bass — "generate euclid pad 1 5" for a rhythm, "generate bass 0 2" for a bassline.`
+
+The word after `generate` names neither composer this build seats. Like an
+unknown command, it is refused rather than guessed at, because a rhythm and a
+bassline written into the wrong place would both play.
+
+```
+generate wobble pad 1 5
+```
+
+**Fix:** write `euclid` (a rhythm for a pad) or `bass` (a bassline for a
+channel).
+
+### `generate euclid writes a Euclidean rhythm into a drum-machine pad: "generate euclid pad 1 5" (five hits over the machine's steps on pad 1), with "rotate N" to turn it and "bar N" for another bar.`
+
+The `euclid` line is missing its pad, its count, or both. Spreading is three
+facts — which pad, how many hits — because a rhythm has to land somewhere to
+be heard.
+
+```
+generate euclid 1 5              # which pad?
+generate euclid pad 1 5
+```
+
+**Fix:** write `pad <n>` and a hit count.
+
+### `generate euclid needs a pad number 1..<p>; got "<x>".`
+
+The pad is not one the machine has at that line. Like `pad`, the count is the
+one the song has reached so far.
+
+```
+generate euclid pad 9 5         # the machine has eight pads
+```
+
+**Fix:** use a pad number `1`..`8`.
+
+### `generate euclid needs 1..<s> hits — the machine holds <s> steps, so <…>; got "<x>".`
+
+The count is zero (which would be silence) or more than the machine's steps
+(which would not fit). A rhythm that fits nowhere is refused rather than
+truncated, because the hits past the end would vanish with nothing to say so.
+
+```
+generate euclid pad 1 99        # the machine holds sixteen steps
+```
+
+**Fix:** write `1`..`<s>`, or widen the machine first with `machine steps N`.
+
+### `generate euclid takes its options in pairs — rotate N, bar N — e.g. "generate euclid pad 1 5 rotate 2".`
+
+An option word with no number after it. Options ride in pairs like the ARP
+page's dials, so a word without its value is a line that stops halfway.
+
+```
+generate euclid pad 1 5 rotate
+```
+
+**Fix:** write `rotate N`, `bar N`, or neither.
+
+### `"<x>" is not a euclid option. The options are: rotate (turn the rhythm), bar (another machine bar).`
+
+The word after the count names no option the rhythm takes. Like an unknown
+command, it is refused rather than skipped, because a skipped word would leave
+a rhythm unturned with nothing to say so.
+
+```
+generate euclid pad 1 5 sideways 2
+```
+
+**Fix:** write `rotate N` to turn the rhythm, or `bar N` for another bar.
+
+### `generate euclid <rotate|bar> is a whole number of steps; got "<x>".`
+
+The option's value is not a whole number. A rhythm turns by steps and reaches
+bars by number, so a fraction is a mistake rather than a finer rhythm.
+
+```
+generate euclid pad 1 5 rotate half
+```
+
+**Fix:** write a whole number.
+
+### `generate euclid reaches another bar with "bar N" (1..<b>); got "<x>".`
+
+The bar is not one the machine may have. Like `machine pattern N`, the ceiling
+is the machine's own, not the bars it happens to have yet.
+
+```
+generate euclid pad 1 5 bar 99
+```
+
+**Fix:** write `1`..`16`.
+
+### `generate bass writes the loop's roots into a channel: "generate bass 0 2" (from row 0 on channel 2), with "rhythm four", "rhythm half" or "rhythm offbeat".`
+
+The `bass` line is missing its row, its channel, or both. A bassline is
+addressed like a `chord` line — where it starts, and which channel plays it —
+because it writes the same cells.
+
+```
+generate bass 0                 # which channel?
+generate bass 0 2
+```
+
+**Fix:** write a row and a channel, with `rhythm <name>` after them to thin
+the line.
+
+### `"<x>" is not a bass rhythm. Write "rhythm" with one of: four, half, offbeat — e.g. "generate bass 0 2 rhythm half".`
+
+The word after `rhythm` names no template the bassline can play. `four` walks
+every chord, `half` every other start, `offbeat` each start half a hold late —
+and anything else is refused rather than played straight, because a straight
+bassline where a skank was meant would still play.
+
+```
+generate bass 0 2 rhythm swing
+```
+
+**Fix:** write `four`, `half` or `offbeat`.
+
 ## The loop, and the lines that follow it
 
 A `progression` is the chord loop a song hangs on, and the two follower lines play
@@ -3230,6 +3546,342 @@ shorter pattern — the tail of a shorter one is rests.
 A character in a pad pattern was neither `.` nor a digit `1`–`9`.
 
 **Fix:** `.` for a rest, `1`–`9` for how hard the hit lands.
+
+## Plugin manifests
+
+These come from the plugin host (`src/plugins/manifest.ts`), not the script
+parser — they are said at install/registration time, and one mistake means the
+plugin does not load at all. Each names the plugin id, the field, and the fix.
+`<…>` is where the value you gave is quoted back.
+
+### `a plugin manifest is an object with id, name, version, kind and entry.`
+
+The manifest is not an object at all (a list, a string, nothing). Hand the host
+a manifest shaped like the one in `doc/11-plugins.md`.
+
+**Fix:** an object with `id`, `name`, `version`, `kind` and `entry`.
+
+### `plugin id "<…>" is not reverse-DNS. Use lowercase letters, digits and hyphens with at least one dot, e.g. "com.example.supersaw".`
+
+The `id` is missing, has capitals or spaces, or has no dot. The id is what songs
+pin — it must be stable and machine-spelled.
+
+**Fix:** lowercase reverse-DNS with at least two labels, e.g.
+`com.example.supersaw`.
+
+### `plugin "<id>" needs a name of 1-32 characters.` / `has a name longer than 32 characters. Shorten it.`
+
+The `name` is empty or longer than the browser row fits.
+
+**Fix:** a name of 1–32 characters.
+
+### `plugin "<id>" needs a version like "1.2.3". Got "<…>".`
+
+The `version` is not `MAJOR.MINOR.PATCH` in digits. Songs pin major.minor, so
+the shape is load-bearing.
+
+**Fix:** three dot-separated numbers, e.g. `1.0.0`.
+
+### `plugin "<id>" has kind "<…>". Pick one of: instrument, effect, generator, panel, io.`
+
+The `kind` names no seat the host has.
+
+**Fix:** one of `instrument`, `effect`, `generator`, `panel`, `io`.
+
+### `plugin "<id>" needs an entry module path, e.g. "./index.ts".`
+
+The `entry` is missing or blank. The host loads it with a dynamic `import()` —
+never `eval` — so it must name a real module.
+
+**Fix:** the module path, e.g. `./index.ts`.
+
+### `plugin "<id>" targets apiVersion "<…>", but this build speaks 1-<…>.`
+
+The plugin asks for a newer host API than this build, or no whole-number API
+at all. Older APIs keep working; newer ones are refused rather than guessed at.
+
+**Fix:** target an `apiVersion` this build speaks, or update Tracklet.
+
+### `plugin "<id>" has params that are not a list.` / `declares <n> params, but at most 32 fit.` / `has a param that is not an object.`
+
+The `params` field is misshapen. Each param is
+`{ id, label, min, max, default }`, all numbers 0–100.
+
+**Fix:** a list of param objects; at most 32.
+
+### `plugin "<id>" has a param id "<…>". Use a lowercase word starting with a letter, e.g. "cutoff".` / `declares param "<…>" twice.` / `param "<…>" is longer than 24 characters.`
+
+A param `id` is misshapen, duplicated, or too long. Ids are what songs and
+automation lanes address, so they must be stable words.
+
+**Fix:** lowercase `snake_case` starting with a letter, max 24 characters,
+unique within the plugin.
+
+### `plugin "<id>" param "<…>" needs a label of 1-32 characters.` / `needs <min|max|default> to be a number 0-100.` / `needs 0 <= min < max <= 100.` / `has a default outside min-max.`
+
+A param's human or numeric shape is wrong. Every number is a percentage 0–100
+— never a 0–1 fraction — the same rule as Tracklet Script.
+
+**Fix:** a 1–32 character label, `0 <= min < max <= 100`, and a `default`
+between `min` and `max`.
+
+### `plugin "<id>" declares latencyMs "<…>", but latency is 0-100 whole milliseconds.`
+
+The `latencyMs` claim is negative, fractional, not a number at all, or bigger
+than the scheduler's look-ahead can honour. The host starts latent notes
+early, so a claim past 100ms could never land on its grid.
+
+**Fix:** whole milliseconds `0`–`100`, or leave `latencyMs` out (absent is
+`0`: most renders start at their attack).
+
+### `plugin "<id>" declares outs "<…>", but outs is 1-8 names.` / `has an out name "<…>". Use a file-safe word of 1-24 characters, e.g. "kick".` / `declares out "<…>" twice.`
+
+The `outs` claim is empty, longer than eight, misshapen, blank, too long for
+a file row, or doubled. The names are what per-out stems will be called, so
+they must be stable file-safe words.
+
+**Fix:** 1–8 unique names of 1–24 characters, or leave `outs` out (an
+undeclared multi-out render gets `out1..N`).
+
+### `plugin "<id>" declares permissions "<…>", but permissions is a list like ["storage"].` / `asks for permission "<…>". The host grants: network, storage.` / `asks for "<…>" twice.`
+
+The `permissions` claim is misshapen, names something no host grants, or
+doubles. Only `network` (fetch through the host) and `storage` (a namespaced
+scope) exist — anything else is a refusal naming the set.
+
+**Fix:** any of `network`, `storage` (each once), or leave `permissions` out
+(absent is none: the seeded RNG and the scoped log every plugin gets).
+
+## Plugin bundles
+
+These come from the installer (`src/plugins/install.ts`), not the script
+parser — they are said at install time, and one mistake means the bundle does
+not install at all. `<…>` is where the filename or id you gave is quoted back.
+A bundle is a store-only zip (no compression, the format `src/audio/zip.ts`
+writes) holding `manifest.json` plus the entry module its `entry` names.
+
+### `that is not a plugin bundle: a .tracklet-plugin is a zip of manifest.json plus its entry module.` / `that is not a plugin bundle: the archive breaks where a file should begin.`
+
+The file is not a zip at all, or it stops being one halfway through. The
+first is said of bytes too short to hold even a header; the second of a
+signature where a file should begin.
+
+**Fix:** hand it the `.tracklet-plugin` zip itself, not a renamed file — and
+re-zip when a download truncated it.
+
+### `that plugin bundle is truncated: a file header stops mid-sentence.` / `that plugin bundle is truncated: a file name runs past the archive.` / `"<…>" is truncated: the archive ends inside its bytes.`
+
+The archive ends inside a header, a name, or a file's bytes.
+
+**Fix:** re-zip; a bundle that survived its trip intact never says this.
+
+### `that plugin bundle holds "<…>": a bundle holds files, not folders.`
+
+An entry is a folder (or nameless). Bundles hold two flat files — manifest
+plus module — never a tree.
+
+**Fix:** zip the two files, not the folder that holds them.
+
+### `that plugin bundle climbs out of its folder in "<…>": entry names stay inside the archive.`
+
+An entry name has `..`, an absolute path, or a backslash: it would land
+outside the folder it came in.
+
+**Fix:** plain relative names (`manifest.json`, `./index.ts`), no climbing.
+
+### `"<…>" is encrypted: a bundle is plain files, never a locked one.`
+
+The entry is password-locked. Tracklet never asks for a plugin password, so
+it refuses rather than prompting.
+
+**Fix:** re-zip with no encryption.
+
+### `"<…>" hides its sizes in a data descriptor: a bundle states them up front.`
+
+The entry uses the streaming layout (a data descriptor after the bytes)
+rather than stating its sizes in the header.
+
+**Fix:** re-zip stored, with sizes up front — the layout
+`src/audio/zip.ts` writes.
+
+### `"<…>" is compressed (method <n>): re-zip the bundle stored, with no compression.`
+
+The entry is deflated (or worse). A plugin is kilobytes of text; compression
+buys nothing and costs the installer a decompressor it refuses to carry.
+
+**Fix:** re-zip with compression off (store / method 0).
+
+### `"<…>" disagrees with itself about its size: a stored file states it once.`
+
+A stored entry whose two size fields differ. One of them is lying, and the
+installer does not guess which.
+
+**Fix:** re-zip; a healthy writer states both sizes the same.
+
+### `"<…>" fails its checksum: the bundle changed after it was zipped.`
+
+The CRC-32 over the entry's bytes does not match the header. The bundle is
+damaged or tampered with.
+
+**Fix:** re-download and re-zip from the source; never hand-edit a bundle.
+
+### `that plugin bundle is too big: a plugin is kilobytes of code, not an archive of archives.`
+
+More than 256 files or 64 MB. A plugin module is text you could read in one
+sitting.
+
+**Fix:** bundle the manifest plus the entry module only — samples and
+artwork travel separately until the format grows room for them.
+
+### `that plugin bundle has no manifest.json: a bundle is a manifest plus its entry module.`
+
+No top-level `manifest.json` in the archive.
+
+**Fix:** add the manifest beside the module before zipping.
+
+### `that bundle’s manifest.json is not JSON: the file it opens with has to parse.`
+
+`manifest.json` does not parse. The installer reads nothing else until it does.
+
+**Fix:** valid JSON, shaped like the manifest in `doc/11-plugins.md`.
+
+### `that bundle’s manifest names no entry module: it needs an entry path, e.g. "./index.js".`
+
+The manifest's `entry` is missing or blank, so there is no module to look for.
+
+**Fix:** the module path, e.g. `./index.ts`.
+
+### `that bundle names "<…>" but holds no such file: the entry module travels inside the zip.`
+
+The `entry` names a file the archive does not hold.
+
+**Fix:** include the entry module in the zip under exactly that path.
+
+### `plugin "<…>" is <kind>, which this build cannot seat yet: instruments, effects, generators and panels install; io arrives in its own milestone.`
+
+The manifest validates but its kind has no seat yet (today: `io`). The
+bundle is well-formed; the build is just older than the kind.
+
+**Fix:** install it into a build whose milestone seats that kind.
+
+### `"<…>" registered, but its code did not load - it falls back in words until it is reinstalled.`
+
+The manifest registered (songs may pin it, the dropdown lists it) but the
+module text would not import. Nothing half-seated: the plugin falls back
+with a notice until a bundle whose code loads replaces it.
+
+**Fix:** reinstall from a bundle whose entry module imports cleanly.
+
+### `plugin needs "install", "uninstall", "allow" or "deny", e.g. plugin install "https://example.com/reverb.tracklet-plugin". It got "<x>".`
+
+The word after `plugin` is none of the four subcommands (or there is no
+word at all). The word fetches a bundle from a URL you approve, forgets an
+installed plugin by id, and answers one permission word per plugin.
+
+```
+plugin
+plugin remove https://example.com/x
+```
+
+**Fix:** write `plugin install` plus the bundle's URL, `plugin uninstall`
+plus the plugin's id, or `plugin allow` / `plugin deny` plus the id and the
+permission word.
+
+### `plugin install needs a URL, e.g. plugin install "https://example.com/reverb.tracklet-plugin".`
+
+`plugin install` with nothing after it. The URL is the whole instruction —
+without it there is nothing to fetch.
+
+```
+plugin install
+```
+
+**Fix:** the bundle's URL, e.g. `plugin install "https://example.com/reverb.tracklet-plugin"`.
+
+### `plugin uninstall needs one id, e.g. plugin uninstall com.example.reverb.`
+
+`plugin uninstall` with nothing after it, or with more than one word. An id
+is dotted, never spaced — without exactly one there is nothing to forget,
+and the line is refused before anything is forgotten.
+
+```
+plugin uninstall
+plugin uninstall com.example.a com.example.b
+```
+
+**Fix:** one id, e.g. `plugin uninstall com.example.reverb`. An id this
+machine never installed is a notice naming it, never a refusal.
+
+### `plugin allow needs one id and one permission, e.g. plugin allow com.example.reverb storage. It got "<x>".`
+
+`plugin allow` (or `plugin deny`) with nothing after the subcommand, one
+word, or three. Without exactly one id and one word there is nothing to
+answer, and the line is refused before anything is answered.
+
+```
+plugin allow
+plugin allow com.example.reverb
+plugin deny com.example.reverb storage extra
+```
+
+**Fix:** one id and one word, e.g. `plugin allow com.example.reverb storage`.
+
+### `"<x>" is not a permission the host grants: ask for network or storage.`
+
+The word after the id is not `network` or `storage`. The host grants a
+closed list, so anything else is refused naming the list — a typo cannot
+grant silence.
+
+```
+plugin allow com.example.reverb location
+```
+
+**Fix:** `network` or `storage`.
+
+### `"<url>" is not a plugin URL: install from an http(s) address, e.g. "plugin install https://example.com/reverb.tracklet-plugin".`
+
+The address is not an `http:`/`https:` URL (or not a URL at all). The
+installer refuses every other scheme before a packet forms.
+
+**Fix:** an `http(s)` address; a local file installs from the file, not from a URL.
+
+### `could not load "<url>" (HTTP <n>).` / `could not read "<url>": the server did not answer.` / `could not read "<url>": the download stopped halfway.`
+
+The fetch failed: a status that is not OK, a server that never answered, or
+a download that stopped halfway. The song already applied — a plugin that did
+not arrive falls back like any other.
+
+**Fix:** check the address and the connection, then run the line again.
+
+### `that is not a song bundle: no song.json inside. A song bundle holds the song plus the plugins and samples it names.`
+
+The `.zip` opened from OPEN FILE is a zip but holds no `song.json` — a stems
+archive, a plugin bundle, or somebody else's zip.
+
+**Fix:** open it where it belongs (a stems zip is not a song), or pick the
+`<name>.tracklet-bundle.zip` the song was packed as.
+
+### `that bundle’s song.json is not JSON: the song it opens with has to parse.`
+
+The bundle's `song.json` does not parse. Nothing else in the bundle is
+touched until it does.
+
+**Fix:** re-pack from the song; never hand-edit a bundle.
+
+### `that bundle’s song.json is a “<format>” file, not a tracklet-song: the song inside has to be a song.`
+
+The `song.json` parses but is not a `tracklet-song` file.
+
+**Fix:** pack the song file the app saves, not a patch, kit, or script.
+
+### `that bundle’s plugin "<id>" has a manifest that is not JSON: every plugin folder opens with a manifest that parses.` / `that bundle’s plugin "<id>" names no entry module: its manifest needs an entry path.` / `that bundle’s plugin "<id>" names "<entry>" but holds no such file: the module travels inside the bundle.`
+
+One plugin folder in the bundle is malformed: its manifest does not parse,
+names no entry, or names a module the folder does not hold. A bundle is
+exact or it is refused — a half-opened song that plays some plugins and
+silently drops one is the failure the format exists to prevent.
+
+**Fix:** re-pack; every `plugins/<id>/` folder holds its manifest plus its module.
 
 ## Non-parser messages the app may show
 

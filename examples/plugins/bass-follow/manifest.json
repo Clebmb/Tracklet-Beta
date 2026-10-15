@@ -1,0 +1,12 @@
+{
+  "id": "com.example.bass-follow",
+  "name": "Bass Follow",
+  "version": "0.9.0",
+  "kind": "generator",
+  "entry": "./index.ts",
+  "apiVersion": 1,
+  "params": [],
+  "description": "A bassline that hangs on the song's chord loop. The second proof a plugin can write music.",
+  "author": "Example Author",
+  "license": "MIT"
+}

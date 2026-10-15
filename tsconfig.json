@@ -34,6 +34,7 @@
   "include": [
     "src",
     "API",
+    "examples",
     "vite.config.ts",
     "vitest.config.ts"
   ]

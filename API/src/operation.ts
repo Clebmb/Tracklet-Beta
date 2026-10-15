@@ -19,7 +19,7 @@
 import type { ApiInput } from './input';
 import type { ApiResult } from './result';
 
-export type ApiCategory = 'language' | 'song' | 'script' | 'library' | 'export' | 'machine' | 'arranger' | 'live' | 'recorder' | 'arp' | 'workspace' | 'meta';
+export type ApiCategory = 'language' | 'song' | 'script' | 'library' | 'export' | 'machine' | 'arranger' | 'live' | 'recorder' | 'arp' | 'generator' | 'workspace' | 'meta';
 
 export interface InputProperty {
   type: 'string' | 'number' | 'boolean' | 'object' | 'array';

@@ -126,13 +126,15 @@ over.
 | `chords` | deep | What one key writes from now on: `off`, `triad`, `7th`. |
 | `hear` | deep | Whether notes are auditioned as the cursor reaches them. |
 | `export` | deep | What an audio export covers and how loud: `export bars 8 to 15 loud -14`. |
-| `page` | deep | Which full screen is showing: `page arranger`, `page mixer`, `page live`, `page recorder`, `page arp`. A session setting, so one script can drive every tab. |
+| `page` | deep | Which full screen is showing: `page arranger`, `page mixer`, `page live`, `page recorder`, `page arp` — or `page plugin:com.example.meter-panel` for a plugin panel (spelling-checked, resolved when it opens; an id this machine lacks leaves the tracker up with a notice). A session setting, so one script can drive every tab. |
 | `live` | deep | How a launch lands: `live quantize 4` waits for the next four bars before a queued scene takes over; `0` (or `off`) is immediate. A session setting, so no file carries it. |
 | `tracks` | core | How many channels the song has (1–8). Before any `track` line. |
 | `track` | core | One channel: name, sound, level, pan, sends, effects, mute. |
 | `sample` | deep | Bring a `.wav` into the app (`sample load "path"`, `sample import`) and name it on a track line. |
 | `record` | deep | A TAKE: capture one from the microphone (`record HOOK`), shape its window (`record trim HOOK 0.1 2.0`, `record loop HOOK 1.0 3.0`) or pick the one the page shows (`record select HOOK`). App state, never in the song. |
 | `layer` | deep | Stack a layer above a channel's voice: the supersaw, the organ, the bell. |
+| `fx` | deep | Seat a plugin effect on a channel's insert chain: `fx 1 com.example.bitcrush-plus 45` (0 is off, 100 is fully wet; at most 4 per channel). |
+| `params` | deep | Turn one knob of a channel's plugin instrument: `params 1 cutoff 70` (0..100; `params 1 <knob> clear` takes one off, `params 1 clear` takes them all off). A `param.<knob>` lane (`automate 1 param.cutoff 20 90 bars 8 to 15`) moves one across bars. |
 | `mute` | core | Silence a channel without deleting it: `mute 4` (same as `track 4 off`). |
 | `unmute` | core | Let a muted channel be heard again: `unmute 4`. |
 | `pattern` | core | Start writing a pattern, and name it. |
@@ -143,6 +145,8 @@ over.
 | `note` | core | Write one note at an exact row and channel: `note 0 2 C-4`. |
 | `chord` | core | Write a whole chord from a row, across channels or into one cell. |
 | `arp` | core | The ARP page's dials — `arp direction updown`, `arp octaves 2 rate 2 gate 60`, `arp mode source` — stored in the song, plus `arp write 0 1 Am` to commit the run they describe, `arp off` to clear them, and `arp hear on` to audition the run as the dials move (a session setting, like `page`). |
+| `plugin` | core | Install a plugin bundle from a URL you approve: `plugin install "https://example.com/reverb.tracklet-plugin"` fetches the zip and seats it (a session setting, like `sample load`; only `http(s)` goes out). `plugin uninstall com.example.reverb` forgets one everywhere (song untouched, channels fall back). `plugin allow com.example.reverb storage` answers one permission word (`network`/`storage`); `plugin deny` takes it back. |
+| `generate` | core | Ask a composer plugin to write music: `generate euclid pad 1 5` spreads five hits over the machine's steps on a pad (`rotate N` turns it, `bar N` reaches another bar), `generate bass 0 2` hangs a bassline on the song's loop (`rhythm four`, `half` or `offbeat`). |
 | `drum` | core | Write one drum hit: `drum 0 4 kick`. |
 | `erase` | core | Take one note back out: `erase 0 1`. |
 
@@ -292,9 +296,10 @@ The longer spellings work too (`famicom`, `gameboy`, `tg16`, `super-nes`,
 **Scales** (5) — `major`, `minor`, `harmonic minor` (a SPACE, unlike the model's
 own id), `dorian`, `pentatonic`.
 
-**Automation targets** (12) for `automate` — the nine knobs, plus `level` (the
+**Automation targets** (12, plus any `param.<knob>`) for `automate` — the nine knobs, plus `level` (the
 channel's own fader), `gate` (how much of each note is heard) and `drift` (how far
-the pitch wanders). Each 0–100. The effects, `pan` and the sends are NOT lane
+the pitch wanders), plus one knob of the channel's plugin instrument
+(`automate 1 param.cutoff 20 90 bars 8 to 15`). Each 0–100. The effects, `pan` and the sends are NOT lane
 targets: they are built only when they are above zero, so a curve could not fade
 them in from nothing — set those on the track line instead. `drift` is the one
 value that behaves like an effect and is still a lane target, because it is a

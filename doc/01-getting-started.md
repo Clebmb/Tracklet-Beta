@@ -329,7 +329,7 @@ for the complete table, and for the handful of things only a hand can do.
 | `SAVE AS SCRIPT (.txt)` | Write this song out as the text the `SCRIPT` panel takes. |
 | `SAVE AS JSON (.json)` | Write this song out as plain data. |
 | `SOUND FILES…` | The two small documents that carry a sound. `SAVE PATCH <CHANNEL>` writes ONE channel's sound as a `.patch.json` — the voice, the layers, the filter, the effects, how long its notes ring, how far they slide and how much of it stands in the room — and `LOAD PATCH ONTO <CHANNEL>…` reads one back as one `Ctrl+Z`; a patch carries NOTHING about the mix (no level, no pan, no group, no pocket), which is what makes it safe to try somebody else's sound in your own song. `SAVE KIT <NAME>` writes the song's four DRUMS as a `.kit.json`, and `LOAD KIT…` reads one back — it becomes the song's drums AND joins your kits, so `kit MYHOUSE` plays it in any song. The name comes from the song's title. |
-| `EXPORT…` | A page with the three ways a song leaves, the two rows that say WHAT goes and HOW LOUD, and one row for what comes IN by hand.  `EXPORT AUDIO (WAV)` renders the mix to a `.wav`; `EXPORT STEMS (.zip)` writes one `.wav` per channel, zipped, for anybody who mixes somewhere else; `EXPORT MIDI (.mid)` writes the notes out for another program, without the sound, the effects or the feel. `RENDER: THE WHOLE SONG` is the region those three write — press it to go back to the whole song after `L` in `F3` marked a few bars, or after a script said `export bars 8 to 15`. `LOUDNESS: OFF` is the level audio exports arrive at — press it to walk `-23` broadcast, `-16` podcast, `-14` streaming and `-9` loud before it goes back to `OFF`, or say `export loud -14` in a script. `MIDI IN: OFF` is a real keyboard: press it to walk `OFF` → `LISTENING` (what you play sounds on the channel under the cursor) → `RECORDING` (it also lands in the bar the playhead is on while the song runs); a clock from the same device also drives the tempo and the start and stop. See [`09-song-files.md`](09-song-files.md). |
+| `EXPORT…` | A page with the three ways a song leaves, the two rows that say WHAT goes and HOW LOUD, and one row for what comes IN by hand.  `EXPORT AUDIO (WAV)` renders the mix to a `.wav`; `EXPORT STEMS (.zip)` writes one `.wav` per channel — per output bus where a plugin separates its outs, so a kit can leave as kick and click — zipped, for anybody who mixes somewhere else; `EXPORT MIDI (.mid)` writes the notes out for another program, without the sound, the effects or the feel. `RENDER: THE WHOLE SONG` is the region those three write — press it to go back to the whole song after `L` in `F3` marked a few bars, or after a script said `export bars 8 to 15`. `LOUDNESS: OFF` is the level audio exports arrive at — press it to walk `-23` broadcast, `-16` podcast, `-14` streaming and `-9` loud before it goes back to `OFF`, or say `export loud -14` in a script. `MIDI IN: OFF` is a real keyboard: press it to walk `OFF` → `LISTENING` (what you play sounds on the channel under the cursor) → `RECORDING` (it also lands in the bar the playhead is on while the song runs); a clock from the same device also drives the tempo and the start and stop. See [`09-song-files.md`](09-song-files.md). |
 
 The arrows or `W A S D` move through the items, `Enter` or `Space` chooses one,
 and `Esc` (or a click) closes the menu. `SAVE` names the file after the song's title, so
@@ -844,7 +844,9 @@ The **ARRANGER** is the screen for exactly this. Pick it from the header dropdow
   with nothing on that channel says **REST**. An export region is bracketed above
   the bands in the same accent `F3` uses.
 - **The lane editor shares the grid.** Below the rows, the selected channel and
-  **target** (cycle it with `TAB`, or the `<`/`>` stepper) draw their lanes on a
+  **target** (cycle it with `TAB`, or the `<`/`>` stepper — on a channel that
+  plays a plugin instrument the cycle includes its knobs as `param.<knob>`) draw
+  their lanes on a
   value axis — the top of the strip is the target's maximum — as a line from
   `(startBar, from)` to `(endBar, to)`, with a **handle** at each end and a flat
   line holding `to` out to the last bar. That is the rule `03-script-reference.md`
@@ -933,9 +935,11 @@ which is why nothing else in the app had to change for it.
   carries no level and ignores it.
 - **`MIDI IN:` in `EXPORT…` plays a real keyboard into the app.** It has three
   stops: `OFF` asks the browser for nothing; `LISTENING` sounds what you play on
-  the channel under the cursor and writes nothing; `RECORDING` also lands each
+  the channel under the cursor and writes no notes; `RECORDING` also lands each
   note in the bar the playhead is on while the song runs, and the whole take is
-  one `Ctrl+Z`. If the device sends a **clock**, the app follows its tempo and its
+  one `Ctrl+Z`. In both modes that hear a keyboard, controllers 16–23 turn the
+  knobs of the channel's plugin instrument in manifest order (16 is the first
+  knob), one `Ctrl+Z` per twist. If the device sends a **clock**, the app follows its tempo and its
   start and stop — the transport's word becomes `SYNC 128`, or `RECORDING`, or
   `NO MIDI` when a mode is on but nothing is behind it. Web MIDI is Chrome, Edge
   and Opera; a browser without it, or a refused prompt, reads `UNAVAILABLE` with

@@ -1,0 +1,15 @@
+{
+  "id": "com.example.stereo-kit",
+  "name": "Stereo Kit",
+  "version": "0.1.0",
+  "kind": "instrument",
+  "entry": "./index.ts",
+  "apiVersion": 1,
+  "params": [
+    { "id": "punch", "label": "Punch", "min": 0, "max": 100, "default": 70 }
+  ],
+  "outs": ["thump", "click"],
+  "description": "One drum in two buses: the body and the beater. The proof a plugin can be multi-out.",
+  "author": "Example Author",
+  "license": "MIT"
+}

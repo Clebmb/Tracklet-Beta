@@ -8,9 +8,13 @@ import {
   decodeMidiIn,
   DEFAULT_MIDI_MODE,
   MIDI_ALL_NOTES_OFF,
+  MIDI_CC_KNOB_BASE,
+  MIDI_CC_KNOB_COUNT,
   MIDI_MODES,
   MIDI_PULSE_MAX_MS,
   MIDI_TEMPO_WINDOW,
+  midiCcKnobIndex,
+  midiCcToKnobValue,
   midiModeAbout,
   midiModeLabel,
   midiRowLabel,
@@ -176,6 +180,53 @@ describe('playing into the grid', () => {
   it('refuses a step or a channel the song does not have', () => {
     const song = playing();
     expect(placeLiveNote(song, 0, 7, 60, 100)).toBe(false);
+  });
+});
+
+describe('controllers turning plugin knobs', () => {
+  it('covers eight general-purpose controllers starting at 16', () => {
+    expect(MIDI_CC_KNOB_BASE).toBe(16);
+    expect(MIDI_CC_KNOB_COUNT).toBe(8);
+    expect(midiCcKnobIndex(16)).toBe(0);
+    expect(midiCcKnobIndex(23)).toBe(7);
+  });
+
+  it('leaves the controllers the app already honours alone', () => {
+    expect(midiCcKnobIndex(15)).toBeNull();
+    expect(midiCcKnobIndex(24)).toBeNull();
+    // The mod wheel, volume, pan, sustain, and the all-notes-off panic.
+    expect(midiCcKnobIndex(1)).toBeNull();
+    expect(midiCcKnobIndex(7)).toBeNull();
+    expect(midiCcKnobIndex(10)).toBeNull();
+    expect(midiCcKnobIndex(64)).toBeNull();
+    expect(midiCcKnobIndex(MIDI_ALL_NOTES_OFF)).toBeNull();
+    // A controller number is exact; a fractional one is a caller bug.
+    expect(midiCcKnobIndex(16.5)).toBeNull();
+    expect(midiCcKnobIndex(Number.NaN)).toBeNull();
+  });
+
+  it('scales 0..127 across the knob range, landing on whole steps', () => {
+    expect(midiCcToKnobValue(0, 0, 100)).toBe(0);
+    expect(midiCcToKnobValue(127, 0, 100)).toBe(100);
+    expect(midiCcToKnobValue(64, 0, 100)).toBe(50);
+    // 63.5 rounds the living-room way, not the banker's way.
+    expect(midiCcToKnobValue(63, 0, 100)).toBe(50);
+    expect(midiCcToKnobValue(0, 40, 60)).toBe(40);
+    expect(midiCcToKnobValue(127, 40, 60)).toBe(60);
+    expect(midiCcToKnobValue(64, 40, 60)).toBe(50);
+    // A knob with no travel stays where it is.
+    expect(midiCcToKnobValue(99, 70, 70)).toBe(70);
+  });
+
+  it('clamps a wild byte rather than throwing', () => {
+    expect(midiCcToKnobValue(300, 0, 100)).toBe(100);
+    expect(midiCcToKnobValue(-5, 0, 100)).toBe(0);
+    expect(midiCcToKnobValue(Number.NaN, 0, 100)).toBe(0);
+  });
+
+  it('says the knobs turn, in both modes that hear a keyboard', () => {
+    expect(midiModeAbout('listen')).toContain('16 to 23');
+    expect(midiModeAbout('record')).toContain('16 to 23');
   });
 });
 

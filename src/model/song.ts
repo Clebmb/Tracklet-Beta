@@ -37,6 +37,9 @@ import type { DrumMachine } from './machine';
 // settings — so the dependency runs one way and a type-only import is erased at
 // build time.
 import type { ArpSettings } from './arp';
+// A TYPE-only import, erased at build time like the lanes above: the song
+// holds knob VALUES, and the manifest half of the bargain lives in plugins.
+import type { PluginParamValues } from '../plugins/instrument';
 import { DEFAULT_STUTTER, tidyArticulation, type Articulation } from './articulation';
 // The two ways a part stops sounding typed (see `variation.ts`): a hit that is
 // not the last one, and a soft note that is darker as well as quieter. The
@@ -476,6 +479,49 @@ export interface Track {
    * missing flavour and never a missing note.
    */
   sample: string | null;
+  /**
+   * The ID of the plugin instrument this channel plays, or `null` for none.
+   *
+   * A REFERENCE, never the code: a song file is text and a plugin is a module
+   * the APP holds, so `plugin "com.example.supersaw"` names an instrument the
+   * app may or may not have — exactly the sample's bargain one field up.
+   *
+   * `null` is the default, and the fallback is the same point: a song naming a
+   * plugin this machine does not have (or has disabled) plays the channel's own
+   * built-in voice, which is why a `voice plugin:<id>` line never changes the
+   * channel's sound — the voice it keeps IS the fallback. A missing plugin is a
+   * missing flavour and never a missing note.
+   */
+  plugin: string | null;
+  /**
+   * The plugin EFFECTS seated on this channel, in chain order.
+   *
+   * A LIST rather than one slot, because an insert chain is an order: the
+   * first entry processes the note's samples first and the next processes the
+   * result. Each entry is an id the APP holds plus an amount 0..100 with 0
+   * meaning OFF — the same bargain as the ten built-in effects, and the
+   * channel's own input is the dry path the host mixes back.
+   *
+   * Empty is the default: a channel that seats none is the channel this app
+   * has always played, whatever the plugin library holds. A song naming an
+   * effect this machine does not have (or has disabled) plays dry for that
+   * slot, the way a missing instrument plays its built-in voice.
+   */
+  fx: TrackFx[];
+  /**
+   * The plugin instrument's knob values on this channel, or `null` for none.
+   *
+   * VALUES, never the knobs: the manifest declares which knobs exist, and this
+   * holds what they are set to RIGHT NOW — ids to 0..100 numbers, coerced
+   * against the manifest wherever they are read, so a preset from a newer
+   * minor that added a knob still loads, minus the knob this build never had.
+   *
+   * `null` is the default, and it means manifest defaults: a channel that
+   * never turned a knob is the channel this app has always played. Only the
+   * instrument's knobs live here — a lane moves them per note under the
+   * `param.<knob>` target, and effect inserts keep manifest defaults.
+   */
+  pluginParams: PluginParamValues | null;
 }
 
 // --- per-channel expression: glide and vibrato ------------------------------
@@ -814,6 +860,91 @@ export function clampEffect(amount: number): number {
 export function effectLabel(amount: number): string {
   const at = clampEffect(amount);
   return at === MIN_EFFECT ? 'OFF' : `${at}%`;
+}
+
+// --- channel plugin effects: an insert chain of seated references ------------
+
+/** One seated plugin effect: which code, and how much of it. */
+export interface TrackFx {
+  /** The effect plugin id, e.g. `com.example.bitcrush-plus`. */
+  id: string;
+  /** How wet, 0..100 with 0 meaning OFF — the built-in effects' own rule. */
+  amount: number;
+}
+
+/** How many plugin effects one channel may seat. Four: a chain, not a rack. */
+export const MAX_TRACK_FX = 4;
+/** Off. The bottom of every insert's range, and what a seated-but-quiet slot plays. */
+export const MIN_TRACK_FX = 0;
+/** As much of it as the app will do. */
+export const MAX_TRACK_FX_AMOUNT = 100;
+
+/** Clamp an insert amount into the range every insert shares. */
+export function clampTrackFxAmount(amount: number): number {
+  if (Number.isNaN(amount)) return MIN_TRACK_FX;
+  return Math.max(MIN_TRACK_FX, Math.min(MAX_TRACK_FX_AMOUNT, Math.round(amount)));
+}
+
+/**
+ * Seat an effect on a channel: add it at the end, or retune the slot that
+ * already names it. A full chain retunes but never grows — the fourth insert
+ * is the last, so a fifth id is refused by the caller, not silently dropped.
+ */
+export function setTrackFx(track: Track, id: string, amount: number): void {
+  const at = clampTrackFxAmount(amount);
+  const slot = track.fx.find((entry) => entry.id === id);
+  if (slot) {
+    slot.amount = at;
+    return;
+  }
+  if (track.fx.length >= MAX_TRACK_FX) return;
+  track.fx.push({ id, amount: at });
+}
+
+/** Take an effect off a channel. Unknown ids are a no-op. */
+export function removeTrackFx(track: Track, id: string): void {
+  track.fx = track.fx.filter((entry) => entry.id !== id);
+}
+
+/** The envelope every plugin knob value shares: 0..100, like every insert. */
+export const MIN_PLUGIN_PARAM_VALUE = 0;
+export const MAX_PLUGIN_PARAM_VALUE = 100;
+
+/** Clamp a knob value into the envelope every manifest range sits inside. */
+export function clampPluginParamValue(value: number): number {
+  if (!Number.isFinite(value)) return MIN_PLUGIN_PARAM_VALUE;
+  return Math.max(MIN_PLUGIN_PARAM_VALUE, Math.min(MAX_PLUGIN_PARAM_VALUE, Math.round(value)));
+}
+
+/**
+ * Turn one knob on a channel: set it, or overwrite the value already there.
+ *
+ * VALUES, never the knobs — which knob an id names is the manifest's business,
+ * so this keeps any single-word id and lets the engine coerce it against the
+ * manifest when the note plays. A channel with no values yet starts one, and
+ * the value is clamped into 0..100, the envelope every manifest range sits
+ * inside.
+ */
+export function setTrackPluginParam(track: Track, id: string, value: number): void {
+  const values = track.pluginParams ?? (track.pluginParams = {});
+  values[id] = clampPluginParamValue(value);
+}
+
+/**
+ * Turn one knob back to its manifest default: forget the override. Unknown ids
+ * are a no-op, and the last knob off collapses the map back to `null` — a
+ * channel that overrides nothing carries nothing, which is what keeps an old
+ * song's file byte-for-byte the file it always was.
+ */
+export function removeTrackPluginParam(track: Track, id: string): void {
+  if (!track.pluginParams) return;
+  delete track.pluginParams[id];
+  if (Object.keys(track.pluginParams).length === 0) track.pluginParams = null;
+}
+
+/** Forget every knob override on a channel, back to manifest defaults. */
+export function clearTrackPluginParams(track: Track): void {
+  track.pluginParams = null;
 }
 
 /**
@@ -2428,6 +2559,15 @@ export function emptyTrack(index: number): Track {
     // And plays its own built-in sound: a channel that names no recording is the
     // channel this app has always played.
     sample: null,
+    // And names no plugin instrument: a channel that names none is the channel
+    // this app has always played, whatever the plugin library holds.
+    plugin: null,
+    // And seats no plugin effect: a channel that seats none is the channel
+    // this app has always played, whatever the plugin library holds.
+    fx: [],
+    // And turns no plugin knob: a channel that names none plays manifest
+    // defaults, which is every channel in every song written before knobs.
+    pluginParams: null,
   };
 }
 

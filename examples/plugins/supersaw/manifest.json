@@ -1,0 +1,15 @@
+{
+  "id": "com.example.supersaw",
+  "name": "Supersaw",
+  "version": "0.9.0",
+  "kind": "instrument",
+  "entry": "./index.ts",
+  "apiVersion": 1,
+  "params": [
+    { "id": "detune", "label": "Detune", "min": 0, "max": 100, "default": 40 },
+    { "id": "decay", "label": "Decay", "min": 0, "max": 100, "default": 60 }
+  ],
+  "description": "Three detuned saws. The first proof a plugin can be an instrument.",
+  "author": "Example Author",
+  "license": "MIT"
+}

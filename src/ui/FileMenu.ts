@@ -16,6 +16,7 @@ import { INSTRUMENT_FILE_EXTENSION, type InstrumentRow } from '../model/instrume
 import { MIDI_FILE_EXTENSIONS } from '../model/midi';
 import { MIDI_EXPORT_FILE_EXTENSION } from '../model/midiExport';
 import { PATCH_FILE_EXTENSION } from '../model/patchfile';
+import { PRESET_FILE_EXTENSION } from '../model/presetfile';
 import { KIT_FILE_EXTENSION } from '../model/kitfile';
 import {
   MAX_SAMPLES,
@@ -83,6 +84,17 @@ export interface FileMenuHandlers {
    * other instruments live finds one.
    */
   drumMachine?: () => FileActionResult;
+  /**
+   * Open the PLUGIN BROWSER: the installed bundles with their ask, their
+   * answers and their cost.
+   *
+   * A FILE-menu row rather than a key because every `F` key is spoken for —
+   * the same reason the DRUM MACHINE lives here as well as behind its key.
+   * The browser only SHOWS: allowing, denying and forgetting persist beside
+   * the song, and enabling stays out (session-only switches would reset on
+   * reload, which is a trap, not a control).
+   */
+  openPlugins?: () => FileActionResult;
   /**
    * Start from a GENRE STARTER: a whole worked skeleton, by id (`house`).
    *
@@ -173,6 +185,20 @@ export interface FileMenuHandlers {
   scriptText?: () => string;
   /** The song as a Tracklet song file, for SAVE AS JSON. */
   jsonText?: () => string;
+  /**
+   * Take a song bundle the user picked, by name and raw bytes.
+   *
+   * Bytes, not text, because a bundle is a ZIP: read as characters it would
+   * be mangled beyond hope, the MIDI precedent one picker over. Unlike OPEN
+   * it never replaces the song on a refusal — a bundle that is not a bundle
+   * leaves everything exactly as it was.
+   */
+  openBundle?: (name: string, bytes: ArrayBuffer) => Promise<FileActionResult> | FileActionResult;
+  /**
+   * Pack the song as a bundle: its JSON, every named third-party plugin's
+   * manifest plus source, every named sample as a `.wav` — for EXPORT BUNDLE.
+   */
+  exportBundle?: () => { fileName: string; bytes: Uint8Array; details: string[] } | { error: string };
   /** The file name (no extension) a save should suggest. */
   fileStem?: () => string;
   /**
@@ -263,6 +289,22 @@ export interface FileMenuHandlers {
    * arrive as sentences in the returned result, never as a half-applied sound.
    */
   openPatch?: (name: string, text: string) => FileActionResult;
+  /**
+   * The cursor channel's plugin knob values as a preset document, for SAVE PRESET.
+   *
+   * TEXT rather than bytes, for the reason a patch is: the file is the format.
+   * An `{ error }` result is the honest failure, and the case that produces it
+   * is a channel with no plugin instrument — a built-in voice has no knobs a
+   * preset could turn.
+   */
+  presetFile?: () => { fileName: string; text: string; detail: string } | { error: string };
+  /**
+   * A preset file, read and applied to the cursor's channel.
+   *
+   * One undo step, and the mix is left alone — see the scene's own note. Errors
+   * arrive as sentences in the returned result, never as half-turned knobs.
+   */
+  openPreset?: (name: string, text: string) => FileActionResult;
   /**
    * The name a SAVE KIT would give the song's drums, for the row label.
    *
@@ -553,13 +595,18 @@ export class FileMenu {
         run: () => this.save(SONG_FILE_EXTENSION, 'application/json', () => this.handlers.jsonText?.()),
       },
       {
+        label: 'PLUGINS...',
+        description: 'The plugin bundles installed on this machine: what each one asked for, what this machine allowed, and what it costs. ENTER allows the next pending word, X takes one back, and two presses of DEL forget one entirely — the song keeps naming it and falls back.',
+        run: () => { this.report(this.handlers.openPlugins?.() ?? null); this.hide(); },
+      },
+      {
         label: 'DRUM MACHINE...',
         description: 'Open the drum machine: a pad for each sound against a row of steps, so a beat is drawn as a grid rather than typed as a column. The machine is part of the SONG \u2014 it saves with it, a script writes it, and a machine an old song does not have simply is not there.',
         run: () => { this.report(this.handlers.drumMachine?.() ?? null); this.hide(); },
       },
       {
         label: 'SOUND FILES...',
-        description: `The two small documents that carry a SOUND: a channel\u2019s SOUND as a ${PATCH_FILE_EXTENSION} \u2014 the voice, its layers, its filter, its effects, how long its notes ring and how much of it stands in the room \u2014 and the song\u2019s DRUMS as a ${KIT_FILE_EXTENSION}. Both fit in a message, both carry nothing about the mix they came from, and both can be read back \u2014 a patch onto any channel, a kit as the drums of any song.`,
+        description: `The three small documents that carry a SOUND: a channel\u2019s SOUND as a ${PATCH_FILE_EXTENSION} \u2014 the voice, its layers, its filter, its effects, how long its notes ring and how much of it stands in the room \u2014 a channel\u2019s plugin knob values as a ${PRESET_FILE_EXTENSION}, and the song\u2019s DRUMS as a ${KIT_FILE_EXTENSION}. All three fit in a message, all three carry nothing about the mix they came from, and all three can be read back \u2014 a patch or a preset onto any channel, a kit as the drums of any song.`,
         run: () => this.showPage('sounds'),
       },
       {
@@ -589,8 +636,13 @@ export class FileMenu {
       },
       {
         label: `EXPORT STEMS (${STEM_ARCHIVE_EXTENSION})`,
-        description: 'One .wav PER CHANNEL, zipped: the mix, taken apart for anybody who mixes somewhere else. Each file is that channel through the same synth, the same effects and the same room, so the parts add back up to the mix \u2014 and each channel is rendered on its own, so a stem export takes longer than an audio export. Only the bars the RENDER row names are written.',
+        description: 'One .wav PER CHANNEL, zipped \u2014 per output bus where a plugin separates its outs, so a kit can leave as kick and click. The mix, taken apart for anybody who mixes somewhere else. Each file is that channel through the same synth, the same effects and the same room, so the parts add back up to the mix \u2014 and each channel is rendered on its own, so a stem export takes longer than an audio export. Only the bars the RENDER row names are written.',
         run: () => this.exportStems(),
+      },
+      {
+        label: 'EXPORT BUNDLE (.ZIP)',
+        description: 'The song PLUS what it names: its JSON, every third-party plugin it plays (manifest plus source), every recording it plays as a `.wav` — zipped, so a song moved to another browser plays instead of falling back. Built-ins travel by reference; the report says what the bundle holds and what travelled by name instead.',
+        run: () => this.exportBundle(),
       },
       {
         label: `EXPORT MIDI (${MIDI_EXPORT_FILE_EXTENSION})`,
@@ -604,7 +656,7 @@ export class FileMenu {
       },
       {
         label: `MIDI IN: ${this.handlers.midiLabel?.() ?? 'OFF'}`,
-        description: 'A real keyboard \u2014 the one thing here that comes IN. Press ENTER to walk OFF, LISTENING and RECORDING. LISTENING sounds what you play on the selected channel and writes nothing; RECORDING also drops each note into the bar the playhead is on, while the song runs, as one Ctrl+Z per take. The browser asks permission the first time, and a device that sends a clock has its TEMPO followed (and its start and stop obeyed) \u2014 the row says SYNC with the tempo it locked on to.',
+        description: 'A real keyboard \u2014 the one thing here that comes IN. Press ENTER to walk OFF, LISTENING and RECORDING. LISTENING sounds what you play on the selected channel and writes no notes; RECORDING also drops each note into the bar the playhead is on, while the song runs, as one Ctrl+Z per take. Controllers 16-23 turn the selected channel\u2019s plugin instrument\u2019s knobs in both modes, one Ctrl+Z per twist. The browser asks permission the first time, and a device that sends a clock has its TEMPO followed (and its start and stop obeyed) \u2014 the row says SYNC with the tempo it locked on to.',
         run: () => { this.report(this.handlers.cycleMidi?.() ?? null); },
       },
       {
@@ -633,7 +685,11 @@ export class FileMenu {
    * whole point of the format is that a sound travels. `LOAD PATCH` says `ONTO`
    * rather than nothing for the same reason: the direction of the act is the one
    * thing a person about to press it should be sure of, since it is not undoable
-   * by anything outliving the session except `Ctrl+Z`.
+   * by anything outliving the session except `Ctrl+Z`. The two PRESET rows are
+   * the same question about a plugin's knobs rather than a sound: they name the
+   * target for the same reason, and `LOAD PRESET` points the channel at the
+   * preset's plugin when it plays another, so the values always land where they
+   * were written for.
    *
    * The two KIT rows are the same question one scope out — a WHOLE SET of drums
    * rather than one channel — and they sit beside the patches because a kit file
@@ -655,6 +711,16 @@ export class FileMenu {
         label: `LOAD PATCH ONTO  ${target}...`,
         description: `Read a ${PATCH_FILE_EXTENSION} and put that sound on ${target}, as ONE undo step. Everything the patch carries is replaced and everything it does not is left exactly where it was, so a level you set, a pan you placed and a group you joined all survive somebody else\u2019s sound arriving. The audio a patch names (its recording) is the app\u2019s: one you do not have plays its built-in fallback, so a shared patch still makes a sound.`,
         run: () => this.pickPatch(),
+      },
+      {
+        label: `SAVE PRESET  ${target}`,
+        description: `Write the plugin knob values of ${target} \u2014 the cutoff, the detune, whatever this channel has turned \u2014 as one small ${PRESET_FILE_EXTENSION} document. The file names its plugin, so loading it onto a channel that plays another instrument is a refusal rather than a retune; the knobs stay the manifest\u2019s, only the values travel.`,
+        run: () => this.savePreset(),
+      },
+      {
+        label: `LOAD PRESET ONTO  ${target}...`,
+        description: `Read a ${PRESET_FILE_EXTENSION} and turn those knobs on ${target}, as ONE undo step. The channel is pointed at the preset\u2019s plugin when it plays another, so the values always land on the instrument they were written for; a preset for code this machine does not have still loads, and the values wait for the code the way a song\u2019s do.`,
+        run: () => this.pickPreset(),
       },
       {
         label: `SAVE KIT  ${kit}`,
@@ -831,7 +897,7 @@ export class FileMenu {
         ? 'STARTERS  -  A WHOLE SONG TO START FROM'
         : page === 'export'            ? 'EXPORT & MIDI  -  OUT AS FILES, IN AS NOTES'
           : page === 'sounds'
-            ? 'SOUND FILES  -  A CHANNEL\u2019S PATCH, OR YOUR DRUMS'
+            ? 'SOUND FILES  -  A PATCH, A PRESET, OR YOUR DRUMS'
             : page === 'samples'
               ? 'SAMPLES  -  THE RECORDINGS YOU LOADED'
               : 'INSTRUMENTS  -  WHAT `wave font` PLAYS');
@@ -1110,13 +1176,18 @@ export class FileMenu {
   private pickFile(): void {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = [SCRIPT_FILE_EXTENSION, SONG_FILE_EXTENSION, ...MIDI_FILE_EXTENSIONS, 'text/plain', 'application/json', 'audio/midi'].join(',');
-    input.setAttribute('aria-label', 'Open a song, script or MIDI file');
+    input.accept = [SCRIPT_FILE_EXTENSION, SONG_FILE_EXTENSION, ...MIDI_FILE_EXTENSIONS, '.zip', 'text/plain', 'application/json', 'audio/midi', 'application/zip'].join(',');
+    input.setAttribute('aria-label', 'Open a song, script, MIDI file or song bundle');
     // Which reader a file gets is decided by its NAME, and a MIDI file must be
-    // read as BYTES: read as text a `.mid` would be mangled beyond hope.
+    // read as BYTES: read as text a `.mid` would be mangled beyond hope. A
+    // bundle is bytes for the same reason — a zip is not characters — and a
+    // stems zip opened here is refused in words rather than mistaken for one.
     this.openPicker(input, (name, file) => {
       this.setStatus(`READING  ${name}...`, 'dim');
       const lower = name.toLowerCase();
+      if (lower.endsWith('.zip')) {
+        return file.arrayBuffer().then((bytes) => this.handlers.openBundle?.(name, bytes) ?? null);
+      }
       return MIDI_FILE_EXTENSIONS.some((extension) => lower.endsWith(extension))
         ? file.arrayBuffer().then((bytes) => this.handlers.openMidi?.(name, bytes) ?? null)
         : file.text().then((text) => this.handlers.openFile?.(name, text) ?? null);
@@ -1176,6 +1247,25 @@ export class FileMenu {
     this.openPicker(input, (name, file) => {
       this.setStatus(`READING  ${name}...`, 'dim');
       return file.text().then((text) => this.handlers.openPatch?.(name, text) ?? null);
+    });
+  }
+
+  /**
+   * Ask the browser for a `.pluginpatch.json`.
+   *
+   * A seventh picker, for the reason there are six: a preset is a document of
+   * its own — values for one plugin's knobs — and "read as a preset" is a
+   * different act from "read as a sound". Read as TEXT, because a preset is a
+   * document a person can read and edit.
+   */
+  private pickPreset(): void {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = [PRESET_FILE_EXTENSION, '.json', 'application/json'].join(',');
+    input.setAttribute('aria-label', 'Import a saved plugin preset (.pluginpatch.json)');
+    this.openPicker(input, (name, file) => {
+      this.setStatus(`READING  ${name}...`, 'dim');
+      return file.text().then((text) => this.handlers.openPreset?.(name, text) ?? null);
     });
   }
 
@@ -1378,6 +1468,29 @@ export class FileMenu {
   }
 
   /**
+   * Write the song out as a bundle: its JSON plus what it names.
+   *
+   * The counterpart of opening a `.zip` from OPEN FILE, and the one writer
+   * whose report matters as much as its download: the lines under the status
+   * say what the bundle HOLDS and what travelled by name instead, so a song
+   * sent somewhere without its plugins arrives as no surprise.
+   */
+  private exportBundle(): void {
+    const make = this.handlers.exportBundle;
+    if (!make) {
+      this.setStatus('THIS BUILD CANNOT PACK A BUNDLE', 'error');
+      return;
+    }
+    const out = make();
+    if ('error' in out) {
+      this.setStatus('THERE IS NOTHING TO PACK', 'error', [out.error]);
+      return;
+    }
+    this.download(out.fileName, 'application/zip', out.bytes);
+    this.setStatus(`SAVED  ${out.fileName}`, 'ok', out.details);
+  }
+
+  /**
    * Write the cursor channel's sound out as a patch document.
    *
    * The counterpart of `LOAD PATCH`, and the smallest of the writers: a patch is
@@ -1401,6 +1514,32 @@ export class FileMenu {
     this.setStatus(`SAVED  ${out.fileName}`, 'ok', [
       out.detail,
       'No level, no pan and no group: a patch is the sound, not where it sat.',
+    ]);
+  }
+
+  /**
+   * Write the cursor channel's plugin knob values out as a preset document.
+   *
+   * The counterpart of `LOAD PRESET`, and the smallest of the writers beside
+   * `savePatch`: a preset is text the model builds in one call. The line under
+   * the status says which plugin the values belong to — the one thing a person
+   * handing the file to somebody else needs true.
+   */
+  private savePreset(): void {
+    const make = this.handlers.presetFile;
+    if (!make) {
+      this.setStatus('THIS BUILD CANNOT WRITE A PRESET', 'error');
+      return;
+    }
+    const out = make();
+    if ('error' in out) {
+      this.setStatus('THERE IS NOTHING TO SAVE', 'error', [out.error]);
+      return;
+    }
+    this.download(out.fileName, 'application/json', out.text);
+    this.setStatus(`SAVED  ${out.fileName}`, 'ok', [
+      out.detail,
+      'Only the values travel: the knobs stay the manifest\u2019s.',
     ]);
   }
 

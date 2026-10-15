@@ -1,0 +1,12 @@
+{
+  "id": "com.example.meter-panel",
+  "name": "Meter Panel",
+  "version": "0.9.0",
+  "kind": "panel",
+  "entry": "./index.ts",
+  "apiVersion": 1,
+  "params": [],
+  "description": "The song as a meter: one bar per channel. The first proof a plugin can be a page.",
+  "author": "Example Author",
+  "license": "MIT"
+}

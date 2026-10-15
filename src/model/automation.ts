@@ -45,6 +45,13 @@
  * cover every rise, fall, sweep, thinning and tiring that music asks for by
  * name, and each is one line of arithmetic in the two consumers.
  *
+ * And a plugin instrument's knobs, spelled `param.<knob>` — `automate 2
+ * param.cutoff 20 90 bars 8 to 15` turns `cutoff` on channel 2 across those
+ * bars. The knobs are the plugin's, so no fixed table lists them: any lowercase
+ * word the manifest would accept as a param id is a target, walked 0..100 and
+ * coerced against the real range when the note plays. A lane moves only the
+ * knob it names over the channel's own values, which stay the song's.
+ *
  * `drift` is why this list is not only knobs and levels: it is a channel VALUE
  * that a note reads when it is built (`model/drift.ts`), not an effect node, so a
  * curve can move it exactly the way it moves `gate`. The wobble it names is the
@@ -65,13 +72,17 @@ import {
   MAX_EFFECT,
   MAX_LEVEL,
   MAX_ORDER,
+  MAX_PLUGIN_PARAM_VALUE,
   MIN_EFFECT,
   MIN_LEVEL,
+  MIN_PLUGIN_PARAM_VALUE,
   clampLevel,
   clampTempoSlot,
 } from './song';
 import { MIN_PARAM, MAX_PARAM, VOICE_PARAMS, clampParam, type VoiceParamId, type VoiceParams } from './voice';
 import { DRIFT_MAX, DRIFT_MIN, clampDrift } from './drift';
+import { MAX_PLUGIN_PARAM_ID } from '../plugins/manifest';
+import type { PluginParamValues } from '../plugins/instrument';
 
 /**
  * Which part of a channel a lane's value lands on.
@@ -109,7 +120,26 @@ export interface AutomationTargetInfo {
 }
 
 /** The things a lane can move. See `AUTOMATION_TARGETS`. */
-export type AutomationTargetId = VoiceParamId | 'level' | 'gate' | 'drift';
+export type AutomationTargetId = VoiceParamId | 'level' | 'gate' | 'drift' | `param.${string}`;
+
+/** The prefix a lane puts on a plugin knob: `param.cutoff` moves `cutoff`. */
+export const PLUGIN_PARAM_TARGET_PREFIX = 'param.';
+
+/**
+ * The knob a lane target moves, or `null` when it moves no knob.
+ *
+ * The same shape the manifest demands of a param id — a lowercase word
+ * starting with a letter — so a lane cannot spell a knob no manifest could
+ * declare. The manifest itself is NOT consulted: which code a knob belongs to
+ * is the app's business, and a lane for a knob this machine's manifest lacks
+ * still loads (and still saves back), moving nothing until the code arrives.
+ */
+export function pluginParamTargetKnob(target: string): string | null {
+  if (!target.startsWith(PLUGIN_PARAM_TARGET_PREFIX)) return null;
+  const knob = target.slice(PLUGIN_PARAM_TARGET_PREFIX.length);
+  if (knob.length === 0 || knob.length > MAX_PLUGIN_PARAM_ID) return null;
+  return /^[a-z][a-z0-9_]*$/.test(knob) ? knob : null;
+}
 
 /**
  * What each of the nine VOICE knobs is worth a lane for.
@@ -201,7 +231,10 @@ export const AUTOMATION_TARGET_WORDS: readonly string[] = AUTOMATION_TARGETS.map
 
 /** Whether a word names something a lane can move. */
 export function isAutomationTarget(word: string): word is AutomationTargetId {
-  return Object.prototype.hasOwnProperty.call(AUTOMATION_TARGET_BY_ID, word);
+  if (Object.prototype.hasOwnProperty.call(AUTOMATION_TARGET_BY_ID, word)) return true;
+  // And a plugin knob, spelled `param.<knob>`: the knobs are the plugin's, so
+  // no fixed table can list them, and the shape check above is the whole gate.
+  return pluginParamTargetKnob(word) !== null;
 }
 
 /**
@@ -239,9 +272,35 @@ export function clampAutomationBar(bar: number): number {
   return clampTempoSlot(bar);
 }
 
+/**
+ * What a target offers: its table row, or the synthetic row for a plugin knob.
+ *
+ * A knob's range is the envelope every manifest range sits inside — 0..100 —
+ * because the lane cannot see the manifest the knob belongs to. The engine
+ * coerces the walked value against the real range when the note plays, so a
+ * lane that overshoots a knob's own max still lands on something musical.
+ */
+export function automationTargetInfo(target: string): AutomationTargetInfo | null {
+  const known = (AUTOMATION_TARGET_BY_ID as Readonly<Record<string, AutomationTargetInfo>>)[target];
+  if (known) return known;
+  const knob = pluginParamTargetKnob(target);
+  if (knob === null) return null;
+  return {
+    id: target as AutomationTargetId,
+    label: `PARAM ${knob.toUpperCase()}`,
+    scope: 'note',
+    min: MIN_PLUGIN_PARAM_VALUE,
+    max: MAX_PLUGIN_PARAM_VALUE,
+    low: 'minimum',
+    high: 'maximum',
+    blurb: `how far the plugin's ${knob} knob turns, moved over bars`,
+    reach: 'a filter opening under a build, a detune widening into a chorus, or any knob the song should turn by itself',
+  };
+}
+
 /** Clamp a value into the range its target offers. */
 export function clampAutomationValue(target: AutomationTargetId, value: number): number {
-  const info = AUTOMATION_TARGET_BY_ID[target];
+  const info = automationTargetInfo(target);
   if (!info) return MIN_PARAM;
   // A number it cannot read goes to the safe end of ITS OWN range, before any
   // arithmetic: `Math.round(NaN)` is `NaN`, and a `NaN` that reached a gain would
@@ -454,7 +513,7 @@ export function sameLane(a: AutomationLane, b: AutomationLane): boolean {
  * channel you happen to have selected.
  */
 export function laneLabel(lane: AutomationLane): string {
-  const info = AUTOMATION_TARGET_BY_ID[lane.target];
+  const info = automationTargetInfo(lane.target);
   const bars = lane.startBar === lane.endBar ? `BAR ${lane.startBar}` : `BARS ${lane.startBar}-${lane.endBar}`;
   return `CH ${lane.track} ${info?.label ?? lane.target} ${lane.from} -> ${lane.to} · ${bars}`;
 }
@@ -473,4 +532,40 @@ export function laneScript(lane: AutomationLane): string {
  */
 export function lanesToScript(lanes: readonly AutomationLane[]): string {
   return sortAutomationLanes(lanes).map((lane) => laneScript(lane)).join('\n');
+}
+
+/**
+ * A channel's plugin knob values at a step, with every `param.<knob>` lane applied.
+ *
+ * The base plus the lanes' Overrides: a lane moves only the knob it names, so
+ * two lanes on two knobs compose and a lane on one knob leaves every other at
+ * the channel's own setting. Handed back as a fresh object only when something
+ * actually moved, so the two consumers can compare against `null` and leave
+ * the common case — no lanes, or no lane on a knob — exactly alone.
+ *
+ * `null` base is read as "no overrides": the lanes still walk, from nothing,
+ * and the engine coerces the result against the manifest when the note plays.
+ * A knob no manifest declares survives the walk untouched, the way an unknown
+ * id survives the file — the values are the song's, and whether the code is
+ * in this browser is the engine's business.
+ */
+export function automatedPluginParams(
+  base: PluginParamValues | null,
+  lanes: readonly AutomationLane[],
+  track: number,
+  step: number,
+  stepsPerBar: number,
+): PluginParamValues | null {
+  if (lanes.length === 0) return null;
+  let out: PluginParamValues | null = null;
+  for (const lane of lanes) {
+    if (lane.track !== track) continue;
+    const knob = pluginParamTargetKnob(lane.target);
+    if (knob === null) continue;
+    const at = laneValueAt(lane, step, stepsPerBar);
+    if (at === null) continue;
+    out ??= { ...(base ?? {}) };
+    out[knob] = at;
+  }
+  return out;
 }

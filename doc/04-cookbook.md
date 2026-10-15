@@ -1895,7 +1895,9 @@ That flat tail is the point of a lane: the chorus arrives bright and stays it.
 
 **Change one thing:** drag either handle to reshape the build (one `Ctrl+Z`), or
 change `automate 1 bright 15 95 bars 3 to 6` to `automate 1 level 20 100 bars 5 to
-8` for a fade-in instead. `TAB` cycles the target the editor is showing; `+ ADD
+8` for a fade-in instead. `TAB` cycles the target the editor is showing — on a
+channel that plays a plugin instrument the cycle reaches its knobs as
+`param.cutoff` and friends, so a filter can be drawn open; `+ ADD
 LANE` adds one beside it. The page writes exactly the lane `automate` writes, so
 `F2 → SAVE AS SCRIPT` prints it back as a line, not as a special case.
 
@@ -2010,3 +2012,56 @@ grid in ONE undo step, and `ESC` returns to the tracker. The PREVIEW on the righ
 redraws from the same `generateArp` a `write` commits, so what you see is exactly
 what you will get. Nothing on the page is a performance: the dials are song data
 and the run is ordinary cells.
+
+---
+
+## 30. A kit that leaves as two stems
+
+**What you want:** a drum plugin whose kick and click arrive in a DAW as
+separate files — while the song plays, the same channel pumps the bass out of
+the way. The channel plays `plugin:com.example.stereo-kit` (the repo's
+two-bus proof: `thump` and `click`); `duck 50` on its line dips every other
+channel on each hit, because the pump is per channel rather than per voice;
+`params` turns the kit's own `punch` knob toward 80.
+
+```script
+new
+song "TWO STEMS"
+tempo 122
+tracks 2
+track 1 "KIT" voice plugin:com.example.stereo-kit duck 50
+track 2 "BASS" voice bass hold 2 level 70
+params 1 punch 80
+pattern 1 "A"
+C-2 G-1
+.   .
+E-2 A-1
+.   .
+```
+
+**What each line did.** `voice plugin:…` points the channel at code instead of
+a built-in voice — a channel that names a plugin nobody installed still plays,
+on its built-in fallback with a notice, so the song above parses and sounds
+before the kit arrives. `duck 50` is the sidechain: each kick-hit pushes the
+bass down by half and lets it back up as the note rings. `params 1 punch 80`
+is the song's own tweak of the kit, stored on the channel like any other knob
+turn.
+
+**What the stems look like.** Install the kit and `EXPORT STEMS` writes the
+bass whole plus one file per declared bus:
+`two-stems-01-kit-thump.wav` beside `two-stems-01-kit-click.wav` beside
+`two-stems-02-bass.wav` — each rendered alone through the same graph the mix
+came out of, so the parts add back up to it. A bus the render does not have
+is silence for that note rather than a failed export.
+
+**Change one thing:** `params 1 punch 30` takes the beating out of the click
+while the body stays; `track 1 duck 0` (or `OFF`) stops the pump and the bass
+plays straight through. The browser's detail line reads
+`com.example.stereo-kit@0.1.0 punch outs thump click`, which is where a kit
+says what its buses are called before they ever become files.
+
+**By hand:** seat the kit on the channel (a channel that names it plays the
+fallback until the code is installed), turn `punch` and `duck` where the
+channel's sound is edited, and open `EXPORT… → EXPORT STEMS` for the archive.
+Only channels that carry a note become files, and only declared outs split —
+a mono channel still leaves as exactly one `.wav`.

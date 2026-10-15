@@ -242,6 +242,17 @@ describe('the word', () => {
     expect(result.song.tracks[0].duck).toBe(DEFAULT_DUCK);
   });
 
+  it('ducks from a plugin channel like any other: the pump is per track, not per voice', () => {
+    // A kit that pumps the bass is the reason `duck` is a channel property
+    // rather than a voice one: the sidechain fires on the channel's hits,
+    // whatever code renders them.
+    const result = line('track 1 voice plugin:com.example.stereo-kit duck 60');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.song.tracks[0].plugin).toBe('com.example.stereo-kit');
+    expect(result.song.tracks[0].duck).toBe(60);
+  });
+
   it('is a setting on a track line, not a command of its own', () => {
     // The language's own rule: prefer a knob to a verb. A duck is a property of a
     // channel, so it is written on the `track` line and is deliberately NOT one

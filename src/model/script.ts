@@ -139,6 +139,16 @@ import {
   type VoiceParams,
   type Wave,
 } from './voice';
+import { isPluginPermission, type PluginPermission } from '../plugins/manifest';
+import { parsePluginVoiceRef } from '../plugins/instrument';
+import { isPanelPageRef, parsePanelRef } from '../plugins/panel';
+import {
+  BASS_RHYTHMS,
+  bassFollowNotes,
+  euclidPattern,
+  isBassRhythm,
+  type BassRhythm,
+} from '../plugins/generator';
 import {
   clampLayerField,
   clearTrackLayer,
@@ -156,9 +166,9 @@ import {
   type UserVoice,
 } from './instrument';
 import {
-  AUTOMATION_TARGET_BY_ID,
   AUTOMATION_TARGET_WORDS,
   MAX_AUTOMATION_LANES,
+  automationTargetInfo,
   clampAutomationTrack,
   isAutomationTarget,
   withAutomationLane,
@@ -349,6 +359,16 @@ import {
   setOrder,
   setPatternRows,
   setTrackCount,
+  setTrackFx,
+  setTrackPluginParam,
+  removeTrackPluginParam,
+  clearTrackPluginParams,
+  removeTrackFx,
+  MAX_PLUGIN_PARAM_VALUE,
+  MIN_PLUGIN_PARAM_VALUE,
+  MAX_TRACK_FX,
+  MAX_TRACK_FX_AMOUNT,
+  MIN_TRACK_FX,
   TRACK_EFFECT_BY_ID,
   TRACK_EFFECTS,
   withTempoPoint,
@@ -439,7 +459,13 @@ export const SCRIPT_KEYWORDS: readonly string[] = [
   // earlier: a take is APP state, never a song field, so a file carries no take
   // and the channel's `sample NAME` is still the only thing that reaches a song.
   'record',
-  'layer', 'mute', 'unmute',
+  // A seated plugin insert: `fx 2 com.example.bitcrush-plus 45` processes the
+  // channel's plugin renders through that code, in chain order. It sits beside
+  // `layer` because both are statements about what is stacked on a channel.
+  // And a plugin instrument's KNOBS: `params 2 cutoff 70` turns one toward the
+  // value, beside `fx` because both are statements about a plugin on a channel
+  // — `fx` seats the code, `params` turns its knobs.
+  'layer', 'fx', 'params', 'mute', 'unmute',
   'pattern', 'order', 'clear', 'copy',
   // A RANGE OF STEPS — the one grammar the language was missing (see
   // `model/rows.ts`). It sits with the pattern words because it acts on the
@@ -452,6 +478,19 @@ export const SCRIPT_KEYWORDS: readonly string[] = [
   // them. Additive — a song that never says `arp` stores nothing and writes no
   // version, and the inline modifier is untouched.
   'arp',
+  // A GENERATOR that writes music: `generate euclid pad 1 5` spreads five hits
+  // over the machine's steps on a pad, and `generate bass 0 2` hangs a bassline
+  // on the song's chord loop. It sits beside `arp` because it is the same kind
+  // of thing — a composer the host previews before committing — and it writes
+  // ordinary cells and rows, so no file version moves.
+  'generate',
+  // Installing a PLUGIN from a URL the user approved: `plugin install
+  // https://…` fetches the `.tracklet-plugin` zip and runs the install
+  // pipeline. It sits beside `sample` because it is the same bargain one
+  // scope over: the call IS the approval, nothing fetches unasked, and the
+  // language holds no IO — the URL travels out in `settings` and the scene
+  // does the fetching.
+  'plugin',
   // A DRUM is a hit on a kit channel: `drum 0 4 kick`. It sits beside `note`
   // because it is the same act — write ONE cell at a time — with the cell's sound
   // named instead of its pitch.
@@ -609,6 +648,33 @@ export interface ScriptSettings {
   instrumentLoad?: string;
   /** `sample load <path>`: where the app should fetch a recording from. */
   sampleLoad?: string;
+  /**
+   * `plugin install <url>`: which plugin bundle the app should fetch.
+   *
+   * The URL TEXT as written, unresolved, exactly like `sampleLoad` — the fetch
+   * is the app's job, and writing the line is the approval: nothing fetches a
+   * plugin unasked. Only `http:`/`https:` go out; the installer refuses every
+   * other scheme before a packet forms.
+   */
+  pluginInstall?: string;
+  /**
+   * `plugin uninstall <id>`: which installed plugin the app should forget.
+   *
+   * The id TEXT as written — forgetting is the app's job, and writing the
+   * line is the approval: nothing uninstalls unasked. A session setting like
+   * `pluginInstall`, so no file carries one, and the song is never edited —
+   * channels naming the id fall back with a named notice, the soundfont
+   * bargain one scope over.
+   */
+  pluginUninstall?: string;
+  /**
+   * `plugin allow/deny <id> <word>`: the one grant answer the app should keep.
+   *
+   * Last one wins, like every scalar setting: a script that argues with
+   * itself keeps its last decision. A session setting like `pluginInstall`,
+   * so no file carries one, and answers never enter the song or a bundle.
+   */
+  pluginGrant?: { id: string; permission: PluginPermission; allow: boolean };
   /** `sample import` was asked for, so the app should open the file picker. */
   sampleImport?: boolean;
   /**
@@ -894,6 +960,32 @@ type ScriptCommand =
    */
   | { kind: 'sampleLoad'; line: number; source: string }
   /**
+   * `plugin install URL`: fetch a `.tracklet-plugin` zip and install it.
+   *
+   * The URL text as written — fetching and installing are the scene's job, so
+   * the language stays free of IO the way `sample load` keeps it.
+   */
+  | { kind: 'pluginInstall'; line: number; url: string }
+  /**
+   * `plugin uninstall <id>`: forget one installed plugin everywhere.
+   *
+   * The id TEXT as written — forgetting is the scene's job, so the language
+   * stays free of IO the way `plugin install` keeps it. An id this machine
+   * never installed is a notice naming it, never a refusal: the song the
+   * script built is good, and a line may name code another machine holds.
+   */
+  | { kind: 'pluginUninstall'; line: number; id: string }
+  /**
+   * `plugin allow <id> <word>` / `plugin deny <id> <word>`: answer one
+   * permission for one plugin.
+   *
+   * The id and the word as written — answering is the scene's job, so the
+   * language stays free of IO. The word is validated at parse (a typo cannot
+   * grant silence); the id is not (an id this machine never installed is the
+   * scene's notice, never a refusal).
+   */
+  | { kind: 'pluginGrant'; line: number; id: string; permission: PluginPermission; allow: boolean }
+  /**
    * `sample import`: open the file picker for a `.wav`.
    *
    * A flag rather than a path, for `instrumentImport`'s reason: a browser cannot
@@ -973,6 +1065,16 @@ type ScriptCommand =
        * track line that works this way — see the `sample` branch below for why.
        */
       sample?: string | null;
+      /**
+       * The ID of the plugin instrument this channel plays, or `null` to leave
+       * the one it is on.
+       *
+       * Set with `voice plugin:<id>` and checked for SPELLING and not against a
+       * list — the sample's bargain one field up: the plugin library is the
+       * APP's, so an id this machine has no code for is the FALLBACK rather
+       * than an error.
+       */
+      plugin?: string | null;
       /** How much of the channel goes into the master reverb, 0..100. */
       verb?: number;
       /** How much of the channel goes into the master echo, 0..100. */
@@ -1049,6 +1151,31 @@ type ScriptCommand =
       /** Take the layer out and shift the ones above it down. */
       clear?: boolean;
     }
+  | {
+      kind: 'fx'; line: number; track: number;
+      /**
+       * The effect to seat, e.g. `com.example.bitcrush-plus`. Null with
+       * `clear` means "take the whole chain off this channel" (`fx 2 clear`).
+       */
+      id: string | null;
+      /** How wet, 0..100 with 0 meaning OFF. Absent when clearing. */
+      amount?: number;
+      /** Take one slot — or the whole chain — off the channel. */
+      clear?: boolean;
+    }
+  | {
+      kind: 'params'; line: number; track: number;
+      /**
+       * The knob to turn, e.g. `cutoff`. Null with `clear` means "forget every
+       * override on this channel" (`params 2 clear`), back to manifest
+       * defaults.
+       */
+      id: string | null;
+      /** Where the knob turns to, 0..100. Absent when clearing. */
+      value?: number;
+      /** Take one knob — or every override — back to its default. */
+      clear?: boolean;
+    }
   | { kind: 'order'; line: number; order: number[] }
   | { kind: 'clear'; line: number; pattern: number }
   | { kind: 'copy'; line: number; from: number; to: number }
@@ -1120,6 +1247,31 @@ type ScriptCommand =
    */
   | { kind: 'arpWrite'; line: number; pattern: number; row: number; track: number; octave: number; spec: ChordSpec }
   | { kind: 'progression'; line: number; progression: Progression | null }
+  /**
+   * `generate euclid pad 1 5`: a Euclidean rhythm written into a drum-machine pad.
+   *
+   * `pad` is the pad (1-based), `pulses` how many hits the machine's steps hold,
+   * `rotate` how many steps the rhythm turns forward, and `bar` which machine bar
+   * owns the row. The rhythm is expanded at parse time against the machine size
+   * the lines above left, so a hits count that would not fit is refused with a
+   * line number — and what is written is an ordinary pad row, which is why no
+   * file version moves.
+   */
+  | { kind: 'generateEuclid'; line: number; pad: number; bar: number; pulses: number; rotate: number }
+  /**
+   * `generate bass 0 2`: a bassline that hangs on the song's chord loop.
+   *
+   * `row`/`track` address where the line starts (in the pattern `pattern`
+   * selected), `rhythm` names the template (`four`, `half`, `offbeat`), and
+   * `progression` is the loop as of THIS line — the follower's snapshot bargain,
+   * so a `progression` line below cannot reach back and change what this wrote.
+   * What is written is ordinary cells holding the loop's roots, so no file
+   * version moves.
+   */
+  | {
+      kind: 'generateBass'; line: number; pattern: number; row: number; track: number;
+      octave: number; rhythm: BassRhythm; progression: Progression;
+    }
   | {
     kind: 'follow';
     line: number;
@@ -1243,6 +1395,10 @@ const SETTING_WORDS = new Set([
   // mistake `track 1 detune -5` into an explanation instead of a silent rename
   // of the channel to "DETUNE -5".
   'layer', 'octave', 'detune', 'gain',
+  // A seated plugin insert is a statement of its own, like a layer — `fx 2
+  // com.example.bitcrush-plus 45` — so `track 1 fx` is a line written in the
+  // wrong place, not a channel named FX.
+  'fx',
   ...VOICE_PARAMS.flatMap((param) => [param.id, ...param.aliases]),
 ]);
 
@@ -1354,6 +1510,9 @@ function settingWordHint(word: string, index: number, voices: readonly UserVoice
   }
   if (word === 'layer') {
     return `layer is a statement of its own, on its own line: "layer ${index} 2 wave saw" is the second layer of channel ${index}. Write "tracks ${index}" first if the song has fewer channels.`;
+  }
+  if (word === 'fx') {
+    return `fx is a statement of its own, on its own line: "fx ${index} com.example.bitcrush-plus 45" seats that effect on channel ${index} (0 is off, 100 is fully wet).`;
   }
   if (word === 'octave' || word === 'detune') {
     return `${word} is not a track setting: a voice is always in tune, and where the TRACK plays is written in its notes. Stack a layer and move that instead, e.g. "layer ${index} 2 ${word} ${word === 'octave' ? '1' : '-8'}".`;
@@ -1601,6 +1760,16 @@ export interface ScriptContext {
    */
   progression?: Progression | null;
   /**
+   * The plugin effect ids each channel already seats, index `n` for channel
+   * `n + 1` — so an `fx` line is refused only when the chain it lands on
+   * really is full, the way `polys` keeps a chord honest.
+   *
+   * Passed in for the same reason the widths are: a script is pasted onto a song
+   * that may already seat inserts, and seating one more on a chain with room
+   * must not be refused for it.
+   */
+  fx?: readonly (readonly string[])[];
+  /**
    * How many steps the song's drum machine has right now, so a `pad` pattern is
    * checked against the machine it will land on.
    *
@@ -1639,6 +1808,15 @@ interface ParseState {
    * still typing — rather than a line that parses and quietly does nothing.
    */
   layerCounts: number[];
+  /**
+   * How many plugin effects each channel seats, as the lines so far have left
+   * them — the `layerCounts` bargain one scope over: an insert chain is a list
+   * with a ceiling, so `fx 1 <fifth-id> 45` on a full chain is a mistake the
+   * parser can name while the author is still typing.
+   */
+  fxCounts: number[];
+  /** Which ids each channel seats, so a retune is not mistaken for a fifth seat. */
+  fxIds: Set<string>[];
   /**
    * How many notes each channel can hold at once, as the lines so far have left
    * them: one, unless a `track` line above said otherwise.
@@ -1737,6 +1915,10 @@ export function parseScript(
     // Every channel starts as the one layer it has always been, and as the one
     // note at a time it has always sounded.
     layerCounts: Array.from({ length: context.trackCount }, () => 1),
+    // The inserts the song already seats, so an `fx` line is refused only when
+    // the chain it lands on really is full — the `polys` bargain one scope up.
+    fxCounts: Array.from({ length: context.trackCount }, (_, i) => Math.min(MAX_TRACK_FX, new Set(context.fx?.[i] ?? []).size)),
+    fxIds: Array.from({ length: context.trackCount }, (_, i) => new Set(context.fx?.[i] ?? [])),
     // Seeded from the song: a script appended to a song whose channels are
     // already wide sees them that way, exactly as `sections` and `buses` do.
     polys: (context.polys ?? Array.from({ length: context.trackCount }, () => DEFAULT_POLY))
@@ -1931,6 +2113,8 @@ export function parseScript(
         state.tempoSlots.clear();
         state.layerCounts = Array.from({ length: state.trackCount }, () => 1);
         state.polys = Array.from({ length: state.trackCount }, () => DEFAULT_POLY);
+        state.fxCounts = Array.from({ length: state.trackCount }, () => 0);
+        state.fxIds = Array.from({ length: state.trackCount }, () => new Set<string>());
         state.laneCount = 0;
         state.sections = [];
         state.buses = [];
@@ -2560,7 +2744,10 @@ export function parseScript(
           fail(lineNumber, `"${args[1] ?? ''}" is not something a lane can move. A lane can move: ${words}. The effects, pan and the sends are built only when they are above zero, so a curve cannot fade them in from nothing — set those on the track line instead.`);
           break;
         }
-        const info = AUTOMATION_TARGET_BY_ID[target];
+        // The table row, or the synthetic one for a `param.<knob>` lane: the
+        // gate above already refused anything neither names, so this is always
+        // a range — a knob's 0..100, coerced against the manifest per note.
+        const info = automationTargetInfo(target)!;
         const ends: number[] = [];
         let bad = false;
         for (const text of [args[2], args[3]]) {
@@ -3063,7 +3250,21 @@ export function parseScript(
         }
         const id = args[0].toLowerCase();
         if (!isPageName(id)) {
-          fail(lineNumber, `"${args[0]}" is not a page. ${pageNameHint()}`);
+          // A plugin panel: `page plugin:<id>` — spelling-checked like a voice
+          // (`voice plugin:<id>`), resolved when it opens. An id this machine
+          // has no code for is the FALLBACK rather than an error, so a song
+          // written where the panel lives opens where it does not, on the
+          // tracker, with a notice naming the id.
+          if (!isPanelPageRef(id)) {
+            fail(lineNumber, `"${args[0]}" is not a page. ${pageNameHint()}`);
+            break;
+          }
+          const ref = parsePanelRef(id);
+          if (ref === null) {
+            fail(lineNumber, `"${args[0]}" is not a panel reference. Write "page plugin:<id>" with the panel's id, e.g. "page plugin:com.example.meter-panel".`);
+            break;
+          }
+          commands.push({ kind: 'page', line: lineNumber, page: `plugin:${ref}` });
           break;
         }
         commands.push({ kind: 'page', line: lineNumber, page: id });
@@ -3152,6 +3353,60 @@ export function parseScript(
           break;
         }
         fail(lineNumber, `sample needs "load" or "import", e.g. sample load "samples/break.wav". To give a CHANNEL one, write it on its track line: track 2 "HOOK" sample BRK. It got \"${args[0] ?? ''}\".`);
+        break;
+      }
+      case 'plugin': {
+        // Four statements in this word, the way `sample` has two: INSTALL fetches
+        // a `.tracklet-plugin` zip from a URL and runs the install pipeline,
+        // UNINSTALL forgets one installed plugin by id on all five shelves,
+        // ALLOW and DENY answer one permission word for one plugin.
+        // The line IS the approval — remote installs are off by default, so
+        // nothing fetches unasked, and nothing uninstalls unasked — and both
+        // are app state rather than song data, so both travel out in `settings`
+        // and the scene does the work, keeping the language free of IO.
+        const word = (args[0] ?? '').toLowerCase();
+        if (word === 'uninstall') {
+          // An id is one word (dotted, never spaced): nothing, or more than
+          // one, is the shape of the line misremembered — refused before
+          // anything is forgotten.
+          const id = (args[1] ?? '').trim();
+          if (id === '' || args.length > 2) {
+            fail(lineNumber, 'plugin uninstall needs one id, e.g. plugin uninstall com.example.reverb.');
+            break;
+          }
+          commands.push({ kind: 'pluginUninstall', line: lineNumber, id });
+          break;
+        }
+        if (word === 'allow' || word === 'deny') {
+          // Two words after the subcommand, exactly: the id (dotted, never
+          // spaced) and one permission the host grants. An id the machine never
+          // installed is the scene's notice, never a refusal — but a word no
+          // host grants is a refusal here, so a typo cannot grant silence.
+          const id = (args[1] ?? '').trim();
+          const permission = (args[2] ?? '').trim().toLowerCase();
+          if (id === '' || args.length !== 3) {
+            fail(lineNumber, `plugin ${word} needs one id and one permission, e.g. plugin allow com.example.reverb storage. It got "${args.slice(1).join(' ')}".`);
+            break;
+          }
+          if (!isPluginPermission(permission)) {
+            fail(lineNumber, `"${permission}" is not a permission the host grants: ask for network or storage.`);
+            break;
+          }
+          commands.push({ kind: 'pluginGrant', line: lineNumber, id, permission, allow: word === 'allow' });
+          break;
+        }
+        if (word !== 'install') {
+          fail(lineNumber, `plugin needs "install", "uninstall", "allow" or "deny", e.g. plugin install "https://example.com/reverb.tracklet-plugin". It got \"${args[0] ?? ''}\".`);
+          break;
+        }
+        // Quoted or not, and joined back into one string either way: a URL is
+        // full of slashes and dots, and the tokenizer splits on spaces.
+        const url = args.slice(1).join(' ').trim();
+        if (url === '') {
+          fail(lineNumber, 'plugin install needs a URL, e.g. plugin install "https://example.com/reverb.tracklet-plugin".');
+          break;
+        }
+        commands.push({ kind: 'pluginInstall', line: lineNumber, url });
         break;
       }
       case 'record': {
@@ -3271,6 +3526,11 @@ export function parseScript(
         state.layerCounts.length = count;
         while (state.polys.length < count) state.polys.push(DEFAULT_POLY);
         state.polys.length = count;
+        // Added channels seat nothing, like a brand-new song's do.
+        while (state.fxCounts.length < count) state.fxCounts.push(0);
+        state.fxCounts.length = count;
+        while (state.fxIds.length < count) state.fxIds.push(new Set<string>());
+        state.fxIds.length = count;
         commands.push({ kind: 'tracks', line: lineNumber, count });
         break;
       }
@@ -3571,6 +3831,17 @@ export function parseScript(
             continue;
           }
           if (key === 'voice') {
+            // A plugin instrument first: `voice plugin:<id>` names code the APP
+            // holds, so any well-formed id parses — the sample's bargain — and a
+            // machine without that plugin plays the channel's own sound. The
+            // voice the channel already has IS the fallback, which is why this
+            // branch leaves `track.voice` exactly as it was.
+            const plugin = parsePluginVoiceRef(value.text);
+            if (plugin !== null) {
+              command.plugin = plugin;
+              end -= 2;
+              continue;
+            }
             // A saved sound is addressed exactly like a built-in one: the name is
             // looked up here, and the params are settled at APPLY time, so a
             // script and a click cannot disagree about what `voice MYPAD` means.
@@ -3777,6 +4048,123 @@ export function parseScript(
         if (bad) break;
         if (layerIndex > have) state.layerCounts[trackIndex - 1] = layerIndex;
         commands.push({ kind: 'layer', line: lineNumber, track: trackIndex, index: layerIndex, change });
+        break;
+      }
+      case 'fx': {
+        // A seated plugin insert: `fx 2 com.example.bitcrush-plus 45`.
+        // Like `layer`, it names a channel first — and like `layer 1 2 clear`,
+        // clearing is a whole line: `fx 2 <id> clear` takes one slot off,
+        // `fx 2 clear` takes the chain off.
+        const trackIndex = Number(args[0]);
+        if (!Number.isInteger(trackIndex) || trackIndex < 1 || trackIndex > state.trackCount) {
+          fail(lineNumber, `fx takes a channel number first, e.g. "fx 1 com.example.bitcrush-plus 45". Channels are 1..${state.trackCount}; got "${args[0] ?? ''}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        const second = args[1] ?? '';
+        if (second.toLowerCase() === 'clear' || second.toLowerCase() === 'remove') {
+          if (args.length > 2) {
+            fail(lineNumber, `"${args[1]}" takes nothing after it: write "fx ${trackIndex} clear" on a line of its own.`);
+            break;
+          }
+          state.fxCounts[trackIndex - 1] = 0;
+          state.fxIds[trackIndex - 1] = new Set<string>();
+          commands.push({ kind: 'fx', line: lineNumber, track: trackIndex, id: null, clear: true });
+          break;
+        }
+        if (second === '' || args.length < 3) {
+          fail(lineNumber, `fx seats an effect on a channel: "fx ${trackIndex} com.example.bitcrush-plus 45" (0 is off, 100 is fully wet), "fx ${trackIndex} <id> clear" to take one off, or "fx ${trackIndex} clear" to take the chain off.`);
+          break;
+        }
+        if (/\s/.test(second)) {
+          fail(lineNumber, `an effect id is one word, e.g. "com.example.bitcrush-plus"; got "${second}".`);
+          break;
+        }
+        const third = args[2] ?? '';
+        if (third.toLowerCase() === 'clear' || third.toLowerCase() === 'remove' || third.toLowerCase() === 'off') {
+          if (args.length > 3) {
+            fail(lineNumber, `"${args[2]}" takes nothing after it: write "fx ${trackIndex} ${second} clear" on a line of its own.`);
+            break;
+          }
+          if (state.fxIds[trackIndex - 1]?.has(second)) {
+            state.fxIds[trackIndex - 1]!.delete(second);
+            state.fxCounts[trackIndex - 1] = Math.max(0, (state.fxCounts[trackIndex - 1] ?? 1) - 1);
+          }
+          commands.push({ kind: 'fx', line: lineNumber, track: trackIndex, id: second, clear: true });
+          break;
+        }
+        if (args.length > 3) {
+          fail(lineNumber, `fx seats one effect per line: "fx ${trackIndex} ${second} 45". Got an extra "${args[3]}".`);
+          break;
+        }
+        const amount = Number(third);
+        if (!Number.isFinite(amount) || amount < MIN_TRACK_FX || amount > MAX_TRACK_FX_AMOUNT) {
+          fail(lineNumber, `an insert amount is a percentage ${MIN_TRACK_FX}..${MAX_TRACK_FX_AMOUNT}; got "${third}". ${MIN_TRACK_FX} is off, ${MAX_TRACK_FX_AMOUNT} is fully wet.`);
+          break;
+        }
+        const have = state.fxCounts[trackIndex - 1] ?? 0;
+        const known = state.fxIds[trackIndex - 1]?.has(second) ?? false;
+        if (!known && have >= MAX_TRACK_FX) {
+          fail(lineNumber, `channel ${trackIndex} already seats ${MAX_TRACK_FX} plugin effects. Take one off first: "fx ${trackIndex} <id> clear".`);
+          break;
+        }
+        if (!known) {
+          state.fxCounts[trackIndex - 1] = have + 1;
+          if (!state.fxIds[trackIndex - 1]) state.fxIds[trackIndex - 1] = new Set();
+          state.fxIds[trackIndex - 1]!.add(second);
+        }
+        commands.push({ kind: 'fx', line: lineNumber, track: trackIndex, id: second, amount: Math.round(amount) });
+        break;
+      }
+      case 'params': {
+        // A plugin instrument's knobs: `params 2 cutoff 70` turns one toward
+        // the value. Like `fx`, it names a channel first — and like `fx 2 <id>
+        // clear`, clearing is a whole line: `params 2 cutoff clear` takes one
+        // knob back to its manifest default, `params 2 clear` takes every
+        // override off. Any single lowercase word is kept as the knob: which
+        // knob an id names is the manifest's business, and the engine coerces
+        // it when the note plays — so a knob this machine's manifest lacks
+        // still loads, moving nothing until the code arrives.
+        const trackIndex = Number(args[0]);
+        if (!Number.isInteger(trackIndex) || trackIndex < 1 || trackIndex > state.trackCount) {
+          fail(lineNumber, `params takes a channel number first, e.g. "params 1 cutoff 70". Channels are 1..${state.trackCount}; got "${args[0] ?? ''}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        const second = args[1] ?? '';
+        if (second.toLowerCase() === 'clear' || second.toLowerCase() === 'remove') {
+          if (args.length > 2) {
+            fail(lineNumber, `"${args[1]}" takes nothing after it: write "params ${trackIndex} clear" on a line of its own.`);
+            break;
+          }
+          commands.push({ kind: 'params', line: lineNumber, track: trackIndex, id: null, clear: true });
+          break;
+        }
+        if (second === '' || args.length < 3) {
+          fail(lineNumber, `params turns one knob per line: "params ${trackIndex} cutoff 70" (0..100), "params ${trackIndex} <knob> clear" to take one off, or "params ${trackIndex} clear" to take them off.`);
+          break;
+        }
+        if (!/^[a-z][a-z0-9_]*$/.test(second)) {
+          fail(lineNumber, `a knob id is one lowercase word, e.g. "cutoff"; got "${second}".`);
+          break;
+        }
+        const third = args[2] ?? '';
+        if (third.toLowerCase() === 'clear' || third.toLowerCase() === 'remove' || third.toLowerCase() === 'off') {
+          if (args.length > 3) {
+            fail(lineNumber, `"${args[2]}" takes nothing after it: write "params ${trackIndex} ${second} clear" on a line of its own.`);
+            break;
+          }
+          commands.push({ kind: 'params', line: lineNumber, track: trackIndex, id: second, clear: true });
+          break;
+        }
+        if (args.length > 3) {
+          fail(lineNumber, `params turns one knob per line: "params ${trackIndex} ${second} 70". Got an extra "${args[3]}".`);
+          break;
+        }
+        const value = Number(third);
+        if (!Number.isFinite(value) || value < MIN_PLUGIN_PARAM_VALUE || value > MAX_PLUGIN_PARAM_VALUE) {
+          fail(lineNumber, `a knob value is ${MIN_PLUGIN_PARAM_VALUE}..${MAX_PLUGIN_PARAM_VALUE}; got "${third}".`);
+          break;
+        }
+        commands.push({ kind: 'params', line: lineNumber, track: trackIndex, id: second, value: Math.round(value) });
         break;
       }
       case 'mute':
@@ -4086,6 +4474,113 @@ export function parseScript(
         }
         if (bad) break;
         commands.push({ kind: 'arp', line: lineNumber, settings: patch });
+        break;
+      }
+      case 'generate': {
+        // A generator that writes music: `generate euclid pad 1 5` spreads five
+        // hits over the machine's steps on a pad, and `generate bass 0 2` hangs
+        // a bassline on the song's chord loop. Both write ORDINARY cells and
+        // rows — the same bargain `arp write` and the followers make — so the
+        // grid, the file, `Ctrl+Z` and an export all see the same thing, and no
+        // file version moves.
+        if (args.length === 0) {
+          fail(lineNumber, 'generate takes a generator and what to write: "generate euclid pad 1 5" spreads five hits over the machine\u2019s steps on a pad, or "generate bass 0 2" hangs a bassline on the song\u2019s loop from row 0 on channel 2.');
+          break;
+        }
+        const generator = args[0].toLowerCase();
+        if (generator !== 'euclid' && generator !== 'bass') {
+          fail(lineNumber, `"${args[0]}" is not a generator. The generators are: euclid, bass — "generate euclid pad 1 5" for a rhythm, "generate bass 0 2" for a bassline.`);
+          break;
+        }
+        if (generator === 'euclid') {
+          // `generate euclid pad 1 5` — with `rotate N` to turn the rhythm and
+          // `bar N` for a bar past the first. The hits are counted against the
+          // machine size the lines above left, so a count that would not fit is
+          // refused here rather than truncated in silence.
+          if ((args[1] ?? '').toLowerCase() !== 'pad') {
+            fail(lineNumber, 'generate euclid writes a Euclidean rhythm into a drum-machine pad: "generate euclid pad 1 5" (five hits over the machine\u2019s steps on pad 1), with "rotate N" to turn it and "bar N" for another bar.');
+            break;
+          }
+          const pad = Number(args[2]);
+          if (!Number.isInteger(pad) || pad < 1 || pad > MAX_PADS) {
+            fail(lineNumber, `generate euclid needs a pad number 1..${MAX_PADS}; got "${args[2] ?? ''}".`);
+            break;
+          }
+          const pulses = Number(args[3]);
+          if (!Number.isInteger(pulses) || pulses < 1 || pulses > state.machineSteps) {
+            fail(lineNumber, `generate euclid needs 1..${state.machineSteps} hits — the machine holds ${state.machineSteps} steps, so ${pulses > state.machineSteps ? 'that many would not fit' : 'zero would be silence'}; got "${args[3] ?? ''}".`);
+            break;
+          }
+          let rotate = 0;
+          let bar = state.machineBar;
+          let bad = false;
+          const rest = args.slice(4);
+          if (rest.length % 2 !== 0) {
+            fail(lineNumber, 'generate euclid takes its options in pairs — rotate N, bar N — e.g. "generate euclid pad 1 5 rotate 2".');
+            break;
+          }
+          for (let i = 0; i < rest.length; i += 2) {
+            const key = rest[i].toLowerCase();
+            if (key !== 'rotate' && key !== 'bar') {
+              fail(lineNumber, `"${rest[i]}" is not a euclid option. The options are: rotate (turn the rhythm), bar (another machine bar).`);
+              bad = true;
+              break;
+            }
+            const value = Number(rest[i + 1]);
+            if (!Number.isInteger(value)) {
+              fail(lineNumber, `generate euclid ${key} is a whole number of steps; got "${rest[i + 1]}".`);
+              bad = true;
+              break;
+            }
+            if (key === 'rotate') rotate = value;
+            else {
+              if (value < 1 || value > MAX_MACHINE_BARS) {
+                fail(lineNumber, `generate euclid reaches another bar with "bar N" (1..${MAX_MACHINE_BARS}); got "${rest[i + 1]}".`);
+                bad = true;
+                break;
+              }
+              bar = value;
+            }
+          }
+          if (bad) break;
+          commands.push({ kind: 'generateEuclid', line: lineNumber, pad, bar, pulses, rotate });
+          break;
+        }
+        // `generate bass 0 2` — with `rhythm four`, `rhythm half` or
+        // `rhythm offbeat`. The row and track are checked like a `chord` line's,
+        // and the loop like a follower's: nothing to follow is the follower's
+        // own refusal, because it is the same mistake.
+        if (args.length < 3) {
+          fail(lineNumber, 'generate bass writes the loop\u2019s roots into a channel: "generate bass 0 2" (from row 0 on channel 2), with "rhythm four", "rhythm half" or "rhythm offbeat".');
+          break;
+        }
+        const row = Number(args[1]);
+        const track = Number(args[2]);
+        if (!Number.isInteger(row) || row < 0 || row >= state.rows) {
+          fail(lineNumber, `row must be 0..${state.rows - 1} (the grid shows rows 00..${state.rows - 1}); got "${args[1]}".`);
+          break;
+        }
+        if (!Number.isInteger(track) || track < 1 || track > state.trackCount) {
+          fail(lineNumber, `track must be 1..${state.trackCount}; got "${args[2]}".`);
+          break;
+        }
+        let rhythm: BassRhythm = 'four';
+        const rest = args.slice(3);
+        if (rest.length > 0) {
+          if (rest.length !== 2 || rest[0].toLowerCase() !== 'rhythm' || !isBassRhythm(rest[1].toLowerCase())) {
+            fail(lineNumber, `"${rest.join(' ')}" is not a bass rhythm. Write "rhythm" with one of: ${BASS_RHYTHMS.join(', ')} — e.g. "generate bass 0 2 rhythm half".`);
+            break;
+          }
+          rhythm = rest[1].toLowerCase() as BassRhythm;
+        }
+        if (state.progression === null) {
+          fail(lineNumber, 'there is nothing to follow: this song has no progression yet. Write one above this line — "progression Am F C G" — or hang the channel on a loop the song already has.');
+          break;
+        }
+        commands.push({
+          kind: 'generateBass', line: lineNumber, pattern: state.pattern,
+          row, track, octave: state.octave, rhythm, progression: state.progression,
+        });
         break;
       }
       case 'rows': {
@@ -4607,6 +5102,12 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
       // business, so resolving it against a bank would be the wrong layer to
       // check it in.
       if (command.sample !== undefined) track.sample = command.sample;
+      // And which plugin instrument it plays, or `null` for its own sound. An id
+      // the app has no code for is left ALONE here — the reference is the
+      // song's, and whether the code is in this browser is the engine's
+      // business, so resolving it against a library would be the wrong layer
+      // to check it in.
+      if (command.plugin !== undefined) track.plugin = command.plugin;
       if (command.verb !== undefined) track.verb = clampSend(command.verb);
       if (command.echo !== undefined) track.echo = clampSend(command.echo);
       // The effects, written through the model's own clamp: a line that names two
@@ -4631,6 +5132,49 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
         return;
       }
       setTrackLayer(track, command.index, command.change ?? {});
+      return;
+    }
+    case 'fx': {
+      const track = song.tracks[command.track - 1];
+      if (!track) return;
+      // The parser already refused a fifth seat on a full chain, so this is
+      // the write itself: seat or retune, take one slot off, or take the
+      // whole chain off. An id the app has no code for is left ALONE here —
+      // the reference is the song's, and whether the code is in this browser
+      // is the engine's business, so resolving it against a library would be
+      // the wrong layer to check it in.
+      if (command.clear && command.id === null) {
+        track.fx = [];
+        return;
+      }
+      if (command.clear && command.id !== null) {
+        removeTrackFx(track, command.id);
+        return;
+      }
+      if (command.id !== null && command.amount !== undefined) {
+        setTrackFx(track, command.id, command.amount);
+      }
+      return;
+    }
+    case 'params': {
+      const track = song.tracks[command.track - 1];
+      if (!track) return;
+      // The write itself: turn, take one knob back to its default, or take
+      // every override off. An id no manifest declares is left ALONE here —
+      // the values are the song's, and whether the code is in this browser is
+      // the engine's business, so resolving them against a library would be
+      // the wrong layer to check them in.
+      if (command.clear && command.id === null) {
+        clearTrackPluginParams(track);
+        return;
+      }
+      if (command.clear && command.id !== null) {
+        removeTrackPluginParam(track, command.id);
+        return;
+      }
+      if (command.id !== null && command.value !== undefined) {
+        setTrackPluginParam(track, command.id, command.value);
+      }
       return;
     }
     case 'machine': {
@@ -4922,6 +5466,40 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
       }
       return;
     }
+    case 'generateEuclid': {
+      // The rhythm, spread over the machine the song HAS — the parse already
+      // refused a count that would not fit, so this is the write itself: a full
+      // hit (100) where the rhythm lands, a rest everywhere else. The row lands
+      // like a `pad` row — bar 1 is the pads' own rows, a later bar only owns
+      // its rows — so a generated beat and a typed one are the same thing.
+      const machine = song.machine ?? (song.machine = createMachine());
+      const row = euclidPattern(command.pulses, machine.steps, command.rotate)
+        .map((hit) => (hit ? 100 : 0));
+      const existing = padAt(machine, command.pad) ?? defaultPad(command.pad, machine.steps);
+      if (command.bar === 1) {
+        song.machine = withPad(machine, command.pad, { ...existing, steps: row.slice() });
+        return;
+      }
+      const grown = withPad(machine, command.pad, { ...existing });
+      const rows = machineBarRows(grown, command.bar);
+      rows[command.pad - 1] = row.slice();
+      song.machine = withMachineBar(grown, command.bar, rows);
+      return;
+    }
+    case 'generateBass': {
+      // The roots of the loop this line saw, on the rows the rhythm keeps — the
+      // same cells a follower would write, thinned by the template. Only those
+      // rows are written; everything else on the channel is left alone, the
+      // same bargain `chord ROW TRACK NAME` makes for one cell.
+      const pattern = ensurePattern(song, command.pattern);
+      const rows = pattern.steps.length;
+      for (const note of bassFollowNotes(command.progression, song.key, command.octave, rows, command.row, command.rhythm)) {
+        const cell = pattern.steps[note.row]?.[command.track - 1];
+        if (!cell) continue;
+        setCellNotes(cell, [note.midi]);
+      }
+      return;
+    }
     default:
       return;
   }
@@ -5109,6 +5687,9 @@ export function applyScript(
     // And how wide its channels already are, so a chord in a cell is refused only
     // when the channel it lands on really is too narrow to sound it.
     polys: song.tracks.map((track) => track.poly),
+    // And the inserts its channels already seat, so an `fx` line is refused
+    // only when the chain it lands on really is full.
+    fx: song.tracks.map((track) => track.fx.map((slot) => slot.id)),
     // And the chord loop it already has, so `chord 0 1 follow` works in a script
     // that never wrote a `progression` line — the loop is something a song HAS,
     // and the script may only be hanging another channel on it.
@@ -5147,6 +5728,9 @@ export function applyScript(
       case 'instrumentImport': settings.instrumentImport = true; continue;
       case 'instrumentLoad': settings.instrumentLoad = command.source; continue;
       case 'sampleLoad': settings.sampleLoad = command.source; continue;
+      case 'pluginInstall': settings.pluginInstall = command.url; continue;
+      case 'pluginUninstall': settings.pluginUninstall = command.id; continue;
+      case 'pluginGrant': settings.pluginGrant = { id: command.id, permission: command.permission, allow: command.allow }; continue;
       case 'sampleImport': settings.sampleImport = true; continue;
       // The takes. A capture name is a scalar (the last one wins, as the rest
       // are); the trims and loops are LISTS, because a script may shape several
@@ -5188,13 +5772,13 @@ export const SCRIPT_QUICK_REFERENCE: readonly string[] = [
   'progression Am F C  bus DRUMS 70',
   'instrument use 1  export all',
   'start house  track 1 voice',
-  'page mixer  live  record HOOK',
-  'layer 1 2 wave saw octave 1',
+  'page mixer  live  record  plugin',
+  'layer 2 saw  fx 1 <id>  params',
   'sample 2 BRK  pattern 1 "A"',
   'mute 1 unmute 1  erase 0 1',
   'copy 1 2  clear 0  note 0 1 C-4',
   'chord 0 1 arp  drum 0 4 kick',
-  'rows 0 to 3 repeat 2  order 1',
+  'rows 0 to 3  generate order 1',
 ];
 
 /** The one-line reminder printed under the reference. */

@@ -184,7 +184,7 @@ describe('the manifest publishes the arp page', () => {
     expect(SCRIPT_KEYWORDS).toContain('arp');
     expect(SCRIPT_QUICK_REFERENCE.join(' ').toLowerCase()).toContain('arp');
     expect(SCRIPT_COMMANDS.find((command) => command.word === 'arp')?.example).toBe('arp direction updown');
-    expect(SCRIPT_VERSION).toBe(51);
+    expect(SCRIPT_VERSION).toBe(56);
   });
 
   it('publishes the three number dials and the two modes from the model', () => {

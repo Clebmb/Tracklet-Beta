@@ -17,7 +17,7 @@ import {
 import { HostExitPrompt, readLaunch } from 'phaser-ui-canvas/host';
 
 import { AudioEngine } from '../audio/engine';
-import { canRender, renderSongToPcm, renderStemsToPcm } from '../audio/render';
+import { canRender, renderOutStemsToPcm, renderSongToPcm } from '../audio/render';
 import { machineBarsForSong, machineStepAtRow } from '../audio/machine';
 import { gainDecibels, gainPcm, matchLoudness, type LoudnessMatch } from '../audio/lufs';
 import { decodeWav, encodeWav, monoPcm, pcmSeconds, type PcmAudio } from '../audio/wav';
@@ -33,8 +33,8 @@ import {
 } from '../ui/mixerBoard';
 import { DrumMachineView, type MachineMixId, type PadMixId } from '../ui/DrumMachineView';
 import {
-  AUTOMATION_TARGET_BY_ID,
   MAX_AUTOMATION_LANES,
+  automationTargetInfo,
   tidyLane,
   type AutomationLane,
   type AutomationTargetId,
@@ -167,6 +167,13 @@ import {
   patchToJson,
   soundFromTrack,
   tidyPatchName,
+  presetAbout,
+  presetFileName,
+  presetFromJson,
+  presetNameFromFile,
+  presetToJson,
+  tidyPresetName,
+  PRESET_NAME_FALLBACK,
   withBus,
   captureKit,
   kitAbout,
@@ -176,6 +183,8 @@ import {
   kitNameFromTitle,
   kitRowLabel,
   kitToJson,
+  midiCcKnobIndex,
+  midiCcToKnobValue,
   midiModeLabel,
   midiRowLabel,
   midiStatusAbout,
@@ -192,7 +201,7 @@ import {
   type UserKit,
   stemPlan,
   stemRefusal,
-  stemTracks,
+  stemRequests,
   cellNotes,
   setCellNotes,
   DEFAULT_ARP,
@@ -349,6 +358,51 @@ import {
 } from '../model';
 import { loadVoiceLibrary, saveVoiceLibrary } from '../voiceLibrary';
 import { loadKitLibrary, saveKitLibrary } from '../kitLibrary';
+import { BUILT_IN_EFFECTS, BUILT_IN_GENERATORS, BUILT_IN_INSTRUMENTS, BUILT_IN_PANELS } from '../plugins/builtIn';
+import { forgetInstalledPluginCode, forgetPluginFingerprint, forgetPluginSource, loadInstalledPluginCode, loadPluginFingerprints, loadPluginGrants, loadPluginLibrary, loadPluginSources, pluginCodeMatchesFingerprint, saveInstalledPluginCode, savePluginFingerprint, savePluginGrants, savePluginLibrary, savePluginSource } from '../pluginLibrary';
+import { defaultPluginParams, type InstrumentPlugin } from '../plugins/instrument';
+import { applyPresetValues } from '../plugins/params';
+import { pluginExample, type PluginPermission, type TrackletPluginManifest } from '../plugins/manifest';
+import type { EffectPlugin } from '../plugins/effect';
+import { fetchPluginBundle, importModuleText, installBundledPlugin, installPluginBundle, pluginMigrationNotices, seatModuleForKind, songPluginIds, type SeatedAnyPlugin } from '../plugins/install';
+import { denyPermission, grantedPermissions, grantPermission } from '../plugins/grants';
+import { pluginFromId } from '../plugins/registry';
+import { uninstallPluginEverywhere, type PluginStoredState } from '../plugins/uninstall';
+import { buildSongBundle, parseSongBundle, songBundleFileName } from '../plugins/bundle';
+import { countMachineHits } from '../model/machine';
+import {
+  createPanelCodeBank,
+  findPanelCode,
+  isPanelPageRef,
+  panelTransport,
+  scopePanelElement,
+  seatPanelCode,
+  unseatPanelCode,
+  type MountedPanel,
+  type PanelApi,
+  type PanelCodeBank,
+  type PanelPlugin,
+  type PanelSongView,
+  type PanelTransport,
+} from '../plugins/panel';
+import { seatPanelModule } from '../plugins/loader';
+import {
+  panelDropdownRows,
+  PluginPanelSession,
+  panelCodeMissingNotice,
+  panelThemeDigest,
+} from '../ui/pluginPanel';
+import { PLUGIN_BROWSER_DETAIL_CHARS, PLUGIN_BROWSER_DETAIL_LINES, PluginBrowser } from '../ui/PluginBrowser';
+import { wrap } from '../ui/instrumentRows';
+import {
+  nextDenyAt,
+  nextGrantAt,
+  pendingGrantNote,
+  pluginDetail,
+  pluginRowLabel,
+  pluginRows,
+} from '../ui/pluginBoard';
+import { pluginCpuStats } from '../audio/pluginVoice';
 import { loadSession, saveSession, sessionValue } from '../sessionStore';
 import { startMidiInput, type MidiListener } from '../midiIn';
 import { PatternGrid } from '../ui/PatternGrid';
@@ -371,6 +425,7 @@ import { rememberTheme } from '../themePrefs';
 import { pickStoredTextScale, rememberTextScale } from '../textScalePrefs';
 import {
   activeTextScale,
+  activeTextScaleFactor,
   nextTextScale,
   setTextScale,
   textScaleAbout,
@@ -675,6 +730,22 @@ export class TrackerScene extends Phaser.Scene {
   private menuInput!: MenuInputController;
   private toast!: Toast;
 
+  /**
+   * A plugin panel floating over the canvas, if one is showing — an OVERLAY
+   * rather than a screen, the way the script panel floats over the tracker.
+   * The tracker stays up behind it, so an uninstalled panel breaks nothing.
+   */
+  private pluginPanelSession = new PluginPanelSession();
+  private pluginPanelBox: HTMLDivElement | null = null;
+  private pluginPanelMounted: MountedPanel | null = null;
+  /** Installed panel code seated this session: the bundle's gaps, filled late. */
+  private installedPanelCode: PanelCodeBank = createPanelCodeBank();
+  /** Installed instruments/effects seated this session: heard after an install. */
+  private installedInstruments: InstrumentPlugin[] = [];
+  private installedEffects: EffectPlugin[] = [];
+  /** The transport the open overlay last saw: the live repaint fires on change. */
+  private lastPanelTransport: PanelTransport | null = null;
+
   /** The notice line under the header readout, and the words you click to walk it. */
   private noticeText!: Phaser.GameObjects.Text;
   private noticeZone!: Phaser.GameObjects.Zone;
@@ -726,6 +797,9 @@ export class TrackerScene extends Phaser.Scene {
   private mcpPanel!: McpPanel;
   private helpOverlay!: HelpOverlay;
   private instrumentBrowser!: InstrumentBrowser;
+  private pluginBrowser!: PluginBrowser;
+  /** The rows the browser is showing: the scene's last fresh read, in order. */
+  private pluginBrowserRows: { id: string; label: string; detail: string[] }[] = [];
   private historyMenu!: HistoryMenu;
   private fileMenu!: FileMenu;
   private songMenu!: SongMenu;
@@ -873,6 +947,8 @@ export class TrackerScene extends Phaser.Scene {
   private midiClockBpm: number | null = null;
   /** One undo step per TAKE, not per note — see `playMidiNote`. */
   private midiTakeRecorded = false;
+  /** One undo step per knob TWIST, not per controller tick — see `turnMidiKnob`. */
+  private midiKnobRecorded = false;
   /** The last MIDI word the transport showed, so it is only redrawn on a change. */
   private lastMidiLabel = '';
   private midiStatusAt = 0;
@@ -969,6 +1045,7 @@ export class TrackerScene extends Phaser.Scene {
     this.buildHelpOverlay();
     this.buildHistoryMenu();
     this.buildInstrumentBrowser();
+    this.buildPluginBrowser();
     this.buildFileMenu();
     this.buildSongMenu();
     this.buildVoiceMenu();
@@ -1012,6 +1089,7 @@ export class TrackerScene extends Phaser.Scene {
     this.helpOverlay.destroy();
     this.historyMenu.destroy();
     this.instrumentBrowser.destroy();
+    this.pluginBrowser.destroy();
     this.fileMenu.destroy();
     this.songMenu.destroy();
     this.voiceMenu.destroy();
@@ -1423,6 +1501,24 @@ export class TrackerScene extends Phaser.Scene {
   }
 
   /**
+   * The plugin browser: installed bundles as rows with their ask, their
+   * answers and their cost, opened from the F2 menu.
+   *
+   * Built once and kept hidden; the rows arrive wholesale from a fresh read
+   * on every open and after every action, so the screen can never disagree
+   * with the shelves. The view owns selection and the DEL arm; the scene
+   * owns answering, forgetting and repainting.
+   */
+  private buildPluginBrowser(): void {
+    this.pluginBrowser = new PluginBrowser(this, {
+      onOpenChange: () => this.syncInputMode(),
+      onAllow: (id) => this.allowPluginById(id),
+      onDeny: (id) => this.denyPluginById(id),
+      onDelete: (id) => this.deletePluginById(id),
+    });
+  }
+
+  /**
    * The F2 menu. It owns the DOM half of file handling — the picker and the
    * download — and calls back here for the part that needs the song: making a
    * blank one, installing a parsed one, and serialising the current one.
@@ -1436,12 +1532,15 @@ export class TrackerScene extends Phaser.Scene {
       onOpenChange: () => this.syncInputMode(),
       newSong: () => this.newSongAction(),
       drumMachine: () => this.drumMachineAction(),
+      openPlugins: () => this.pluginsAction(),
       startGenre: (id) => this.startGenreAction(id),
       openFile: (name, text) => this.openFileAction(name, text),
       openMidi: (name, bytes) => this.openMidiAction(name, bytes),
       openSoundFont: (name, bytes) => this.openSoundFontAction(name, bytes),
       openInstrument: (name, text) => this.openInstrumentAction(name, text),
       openSample: (name, bytes) => this.openSampleAction(name, bytes),
+      openBundle: (name, bytes) => this.openBundleAction(name, bytes),
+      exportBundle: () => this.exportSongBundle(),
       samples: () => sampleRows(this.samples, this.song.tracks[this.cursor.track]?.sample ?? null),
       useSample: (id) => this.useSampleAction(id),
       removeSample: (id) => this.removeSampleAction(id),
@@ -1449,7 +1548,7 @@ export class TrackerScene extends Phaser.Scene {
       useInstrument: (id) => this.useInstrumentAction(id),
       removeInstrument: (id) => this.removeInstrumentAction(id),
       scriptText: () => songToScript(this.song, { volume: this.volume }),
-      jsonText: () => songToJson(this.song, { volume: this.volume }),
+      jsonText: () => songToJson(this.song, { volume: this.volume }, this.songPluginVersions()),
       fileStem: () => songFileStem(this.song.title),
       bounceLabel: () => bounceLabel(this.bounceRange(), this.song.order.length),
       clearBounce: () => this.clearBounceAction(),
@@ -1458,6 +1557,8 @@ export class TrackerScene extends Phaser.Scene {
       patchTarget: () => this.song.tracks[this.cursor.track]?.name ?? 'NO CHANNEL',
       patchFile: () => this.patchFile(),
       openPatch: (name, text) => this.openPatchAction(name, text),
+      presetFile: () => this.presetFile(),
+      openPreset: (name, text) => this.openPresetAction(name, text),
       kitName: () => this.kitSaveName(),
       kitFile: () => this.kitFile(),
       openKit: (name, text) => this.openKitAction(name, text),
@@ -1500,6 +1601,7 @@ export class TrackerScene extends Phaser.Scene {
     setTextScale(next);
     rememberTextScale(next);
     this.toast.show(`TEXT ${textScaleLabel(next)}  \u00b7  ${textScaleAbout(next)}`, activeColors().ward);
+    this.refreshPluginPanel();
     return next;
   }
 
@@ -1703,12 +1805,331 @@ export class TrackerScene extends Phaser.Scene {
       rows: (): PageRow[] => [...PAGE_ROWS],
       current: () => this.page,
       select: (id) => this.setPage(id),
+      panelRows: () => panelDropdownRows(this.panelDropdownSource()),
+      panelCurrent: () => this.pluginPanelSession.current,
+      selectPanel: (ref) => this.openPluginPanel(ref),
     });
+    // Installed code arrives late (one dynamic import per remembered source),
+    // so the rows above are the bundle's until it lands and repaints the list.
+    this.loadInstalledPluginCode();
+  }
+
+  /**
+   * Every known panel with its dropdown name: the bundle and the seated
+   * installed code first, installed-without-code after — a row that opens to
+   * a notice rather than no row at all, so an installed panel is found where
+   * a person looks for pages.
+   */
+  private panelDropdownSource(): { id: string; name: string }[] {
+    const seen = new Set<string>();
+    const rows: { id: string; name: string }[] = [];
+    for (const plugin of [...BUILT_IN_PANELS, ...this.installedPanelCode.plugins]) {
+      if (seen.has(plugin.manifest.id)) continue;
+      seen.add(plugin.manifest.id);
+      rows.push({ id: plugin.manifest.id, name: plugin.manifest.name });
+    }
+    for (const manifest of loadPluginLibrary()) {
+      if (manifest.kind !== 'panel' || seen.has(manifest.id)) continue;
+      seen.add(manifest.id);
+      rows.push({ id: manifest.id, name: manifest.name });
+    }
+    return rows;
+  }
+
+  /**
+   * Seat one installed plugin of any kind into the bank its clock reads:
+   * instruments and effects join the arrays the engines resolve (bundle
+   * first, so a bundled id always wins a clash), panels join the code bank
+   * the overlay reads. Same-id reseating replaces, so reinstalling is an
+   * upgrade, never a duplicate voice.
+   */
+  private seatInstalledPlugin(seated: SeatedAnyPlugin): void {
+    if (seated.kind === 'instrument') {
+      const plugin = seated.plugin as InstrumentPlugin;
+      this.installedInstruments = [...this.installedInstruments.filter((entry) => entry.manifest.id !== plugin.manifest.id), plugin];
+    } else if (seated.kind === 'effect') {
+      const plugin = seated.plugin as EffectPlugin;
+      this.installedEffects = [...this.installedEffects.filter((entry) => entry.manifest.id !== plugin.manifest.id), plugin];
+    } else if (seated.kind === 'panel') {
+      seatPanelCode(this.installedPanelCode, seated.plugin as PanelPlugin);
+    }
+    // Generators validate and register — their code is verified and
+    // remembered — but the `generate` word only spells the two built-ins, so
+    // a third-party generator has no in-app stage yet. The API will take it.
+  }
+
+  /** Hand the live and export clocks the code installed so far, bundle first. */
+  private pushInstalledCodeToEngines(): void {
+    this.engine.setPluginVoices(
+      this.song.tracks.map((track) => track.plugin),
+      [...BUILT_IN_INSTRUMENTS, ...this.installedInstruments],
+    );
+    this.engine.setPluginFx(
+      this.song.tracks.map((track) => track.fx),
+      [...BUILT_IN_EFFECTS, ...this.installedEffects],
+    );
+  }
+
+  /**
+   * Re-seat every installed plugin whose source was remembered: one dynamic
+   * `import()` per stored text, through the same trust gate an install
+   * takes. A refusal or a throwing import seats nothing — the manifest keeps
+   * its library row and its fallbacks, which open to the code-missing notice
+   * rather than a plugin that half arrived. Said once when something lands;
+   * silence otherwise, because an empty library loading nothing is the
+   * common case, not news.
+   */
+  private loadInstalledPluginCode(): void {
+    const manifests = loadPluginLibrary();
+    if (manifests.length === 0) return;
+    const sources = loadInstalledPluginCode();
+    const byId = new Map(manifests.map((manifest) => [manifest.id, manifest]));
+    const ids = manifests.map((manifest) => manifest.id).filter((id) => sources[id] !== undefined);
+    if (ids.length === 0) return;
+    const fingerprints = loadPluginFingerprints();
+    void (async () => {
+      const seated: string[] = [];
+      const changed: string[] = [];
+      for (const id of ids) {
+        const manifest = byId.get(id);
+        const text = sources[id];
+        if (manifest === undefined || text === undefined) continue;
+        if (!pluginCodeMatchesFingerprint(id, text, fingerprints)) {
+          changed.push(id);
+          continue;
+        }
+        let module: Record<string, unknown>;
+        try {
+          module = await importModuleText(text);
+        } catch {
+          continue;
+        }
+        const result = seatModuleForKind(manifest as unknown, module);
+        if (!result.ok) continue;
+        this.seatInstalledPlugin(result.seated);
+        seated.push(id);
+      }
+      if (changed.length > 0) {
+        this.toast.show(
+          `plugin code changed since install: ${changed.join(', ')} - reinstall to seat it.`,
+          activeColors().danger,
+        );
+      }
+      if (seated.length === 0) return;
+      this.pushInstalledCodeToEngines();
+      this.pageMenu?.render();
+      this.toast.show(`plugin code loaded: ${seated.join(', ')} - installed plugins play.`, activeColors().ward);
+    })();
+  }
+
+  /**
+   * Install a `.tracklet-plugin` zip: open, register, import, seat — then
+   * remember what passed. Manifests persist on registration (a song pins
+   * them, the dropdown lists them); source persists only when seating
+   * passed, so a reload re-seats exactly the code that played. The install
+   * screen M6 still owns will call this per dropped file; a development
+   * build can reach it through the scene today.
+   */
+  async installPluginFromBytes(zipBytes: Uint8Array, source: unknown = null): Promise<boolean> {
+    const base = loadPluginLibrary().map((manifest) => ({ manifest, enabled: true }));
+    const result = await installPluginBundle(zipBytes, base, { source });
+    if (!result.ok) {
+      this.toast.show(result.error, activeColors().ward);
+      return false;
+    }
+    savePluginLibrary(result.install.registry.map((entry) => entry.manifest));
+    if (result.install.source !== null) savePluginSource(result.install.entry.manifest.id, result.install.source);
+    const seated = result.install.seated;
+    if (seated === null) {
+      this.toast.show(result.install.unseatedReason ?? 'installed without code.', activeColors().ward);
+      this.pageMenu?.render();
+      return true;
+    }
+    this.seatInstalledPlugin(seated);
+    const id = seated.plugin.manifest.id;
+    saveInstalledPluginCode(id, result.install.moduleText);
+    savePluginFingerprint(id, result.install.fingerprint);
+    this.pushInstalledCodeToEngines();
+    this.pageMenu?.render();
+    const news = seated.kind === 'instrument'
+      ? `plugin "${id}" installed - a channel on \`voice plugin:${id}\` plays it now.`
+      : seated.kind === 'effect'
+        ? `plugin "${id}" installed - seat it with \`fx TRACK ${id} AMOUNT\`.`
+        : seated.kind === 'panel'
+          ? `panel "${id}" seated - open it from the page dropdown.`
+          : `plugin "${id}" installed - its code verified and remembered.`;
+    this.toast.show(`${news}${pendingGrantNote(seated.plugin.manifest, loadPluginGrants())}`, activeColors().ward);
+    return true;
+  }
+
+  /**
+   * Forget one installed plugin everywhere: the registry entry, the remembered
+   * code, the recorded origin, the grant answers and the weighed fingerprint —
+   * through the one door in `src/plugins/uninstall.ts` — then unseat its live
+   * code from the banks both clocks read and say what the song does without it.
+   *
+   * The song is never edited: channels naming the id fall back to built-ins
+   * with a named notice (the soundfont bargain), and reinstalling restores the
+   * song as written. An id this machine never installed is a notice naming it,
+   * never a refusal — a line may name code another machine holds.
+   */
+  private uninstallPluginById(id: string): void {
+    const before: PluginStoredState = {
+      registry: loadPluginLibrary().map((manifest) => ({ manifest, enabled: true })),
+      code: loadInstalledPluginCode(),
+      sources: loadPluginSources(),
+      grants: loadPluginGrants(),
+      fingerprints: loadPluginFingerprints(),
+    };
+    const known =
+      pluginFromId(before.registry, id) !== null ||
+      id in before.code ||
+      id in before.sources ||
+      id in before.grants ||
+      id in before.fingerprints;
+    const after = uninstallPluginEverywhere(before, id);
+    savePluginLibrary(after.registry.map((entry) => entry.manifest));
+    forgetInstalledPluginCode(id);
+    forgetPluginSource(id);
+    forgetPluginFingerprint(id);
+    savePluginGrants(after.grants);
+    this.installedInstruments = this.installedInstruments.filter((entry) => entry.manifest.id !== id);
+    this.installedEffects = this.installedEffects.filter((entry) => entry.manifest.id !== id);
+    unseatPanelCode(this.installedPanelCode, id);
+    this.pushInstalledCodeToEngines();
+    this.pageMenu?.render();
+    this.toast.show(
+      known
+        ? `plugin "${id}" uninstalled - channels naming it fall back to built-ins; reinstalling restores them as written.`
+        : `no plugin named "${id}" - nothing uninstalled.`,
+      activeColors().ward,
+    );
+  }
+
+  /**
+   * Answer one permission word for one plugin: grant it or take it back, and
+   * persist the answers under their own key — never the song, never a bundle.
+   *
+   * The line was the approval, so applying is unconditional; the toast is the
+   * honest half, saying whether the decision changed anything. Granting what
+   * stands granted (or denying what was never allowed) writes the same map
+   * back and says so, rather than pretending. An id nothing installed takes
+   * its answer anyway — a sparse row for a stranger costs nothing, and the
+   * row reads as answers only beside a manifest that declares the word.
+   */
+  private applyPluginGrant(id: string, permission: PluginPermission, allow: boolean): void {
+    const grants = loadPluginGrants();
+    const held = grantedPermissions(grants, id).includes(permission);
+    if (allow && held) {
+      this.toast.show(`plugin "${id}" already allows ${permission}.`, activeColors().ward);
+      return;
+    }
+    if (!allow && !held) {
+      this.toast.show(`plugin "${id}" never allowed ${permission} - nothing taken back.`, activeColors().ward);
+      return;
+    }
+    savePluginGrants(allow ? grantPermission(grants, id, permission) : denyPermission(grants, id, permission));
+    this.toast.show(
+      allow ? `plugin "${id}" may now use ${permission}.` : `permission ${permission} taken back from plugin "${id}".`,
+      activeColors().ward,
+    );
+  }
+
+  /**
+   * The F2 menu's PLUGINS row: repaint from a fresh read and show the browser.
+   *
+   * A FileActionResult rather than void because a menu row runs through
+   * `report`: the status well says what opened, the way DRUM MACHINE does.
+   */
+  private pluginsAction(): FileActionResult {
+    this.refreshPluginBrowser();
+    this.pluginBrowser.show();
+    const count = this.pluginBrowserRows.length;
+    return { status: count === 0 ? 'NO PLUGINS INSTALLED' : `PLUGIN BROWSER OPEN  ${count} INSTALLED`, tone: 'ok' };
+  }
+
+  /**
+   * The browser's rows, repainted from a fresh read: the registry in order,
+   * this machine's answers, the meter's costs, one wrapped detail each.
+   *
+   * Called on every open and after every action the browser takes, so the
+   * screen can never disagree with the shelves. Labels and details come from
+   * the Phaser-free `pluginBoard` decisions — the view only shows them.
+   */
+  private refreshPluginBrowser(): void {
+    const registry = loadPluginLibrary().map((manifest) => ({ manifest, enabled: true }));
+    const grants = loadPluginGrants();
+    const stats = pluginCpuStats();
+    this.pluginBrowserRows = pluginRows(registry, stats, grants).map((row) => {
+      const entry = pluginFromId(registry, row.id);
+      const detail = entry === null
+        ? `${row.id} - installed, manifest unreadable.`
+        : pluginDetail(entry, pluginExample(entry.manifest), grants);
+      return {
+        id: row.id,
+        label: pluginRowLabel(row),
+        detail: wrap(detail, PLUGIN_BROWSER_DETAIL_CHARS).slice(0, PLUGIN_BROWSER_DETAIL_LINES),
+      };
+    });
+    this.pluginBrowser.setRows(this.pluginBrowserRows);
+  }
+
+  /** ENTER in the browser: allow the row's next pending word, then repaint. */
+  private allowPluginById(id: string): void {
+    const registry = loadPluginLibrary().map((manifest) => ({ manifest, enabled: true }));
+    const selection = registry.findIndex((entry) => entry.manifest.id === id);
+    if (selection < 0) return;
+    const next = nextGrantAt(registry, loadPluginGrants(), selection);
+    if (next === null) return;
+    this.applyPluginGrant(next.id, next.permission, true);
+    this.refreshPluginBrowser();
+  }
+
+  /** X in the browser: take back the row's next granted word, then repaint. */
+  private denyPluginById(id: string): void {
+    const registry = loadPluginLibrary().map((manifest) => ({ manifest, enabled: true }));
+    const selection = registry.findIndex((entry) => entry.manifest.id === id);
+    if (selection < 0) return;
+    const next = nextDenyAt(registry, loadPluginGrants(), selection);
+    if (next === null) return;
+    this.applyPluginGrant(next.id, next.permission, false);
+    this.refreshPluginBrowser();
+  }
+
+  /** Second DEL in the browser: forget the row everywhere, then repaint. */
+  private deletePluginById(id: string): void {
+    this.uninstallPluginById(id);
+    this.refreshPluginBrowser();
+  }
+
+  /**
+   * Seat one installed panel's code beside its manifest: the trust gate plus
+   * the bank, or the one named reason as a toast. The module arrives already
+   * imported by the caller (dynamic `import()` of a user-approved path); the
+   * install screen M6 owns will call this per panel, and a development build
+   * can reach it through the scene. Seating repaints the dropdown so the new
+   * row answers without reopening the list.
+   */
+  seatInstalledPanelCode(manifestJson: unknown, module: Record<string, unknown>): boolean {
+    const seated = seatPanelModule(manifestJson, module);
+    if (!seated.ok) {
+      this.toast.show(seated.error, activeColors().ward);
+      return false;
+    }
+    seatPanelCode(this.installedPanelCode, seated.seated.plugin);
+    this.toast.show(`panel "${seated.seated.plugin.manifest.id}" seated - open it from the page dropdown.`, activeColors().ward);
+    this.pageMenu?.render();
+    return true;
   }
 
   /** Show one of the app's full screens, or stay where we are if it is already up. */
   private setPage(id: PageId): void {
-    if (id === this.page) return;
+    // A built-in screen replaces any overlay: the dropdown lists both, and the
+    // app shows one thing at a time. Picking the screen underneath an open
+    // panel still puts the panel away, so the button and the canvas agree.
+    const overlayOpen = this.pluginPanelBox !== null;
+    if (id === this.page && !overlayOpen) return;
+    this.closePluginPanel();
     // Any text box is committed first, so a name typed but not confirmed is kept
     // when the screen changes rather than silently dropped.
     this.trackList.commitRename();
@@ -1730,6 +2151,303 @@ export class TrackerScene extends Phaser.Scene {
     else if (id === 'recorder') this.openRecorder();
     else if (id === 'arp') this.openArp();
     this.pageMenu.render();
+  }
+
+  /**
+   * Open a plugin panel as a DOM overlay over the canvas.
+   *
+   * The box is the host's: a chrome strip with the panel's name (so a panel
+   * with no close UI of its own can still be put away) and a body the plugin
+   * fills. The plugin mounts into the BODY, never the box — its `unmount`
+   * cannot take the chrome with it, and the chrome cannot leak into what the
+   * plugin is tested against. A mount that throws is a closed box plus a
+   * notice, never half a panel: one silent overlay at most, never a stuck one.
+   */
+  private openPluginPanel(ref: string): void {
+    this.closePluginPanel();
+    const known = [
+      ...BUILT_IN_PANELS.map((plugin) => ({ id: plugin.manifest.id, enabled: true })),
+      ...loadPluginLibrary().map((manifest) => ({ id: manifest.id, enabled: true })),
+    ];
+    const opened = this.pluginPanelSession.open(ref, known);
+    if (!opened.ok) {
+      this.toast.show(opened.notice, activeColors().ward);
+      return;
+    }
+    const plugin = findPanelCode(this.installedPanelCode, BUILT_IN_PANELS, opened.id);
+    if (plugin === null) {
+      this.toast.show(panelCodeMissingNotice(opened.id), activeColors().ward);
+      this.pluginPanelSession.close();
+      return;
+    }
+    const box = document.createElement('div');
+    scopePanelElement(box, plugin.manifest.id);
+    Object.assign(box.style, {
+      position: 'fixed',
+      display: 'block',
+      zIndex: '60',
+      boxSizing: 'border-box',
+      margin: '0',
+      borderStyle: 'solid',
+      borderWidth: '1px',
+      overflow: 'auto',
+    } satisfies Partial<CSSStyleDeclaration>);
+    const chrome = document.createElement('div');
+    chrome.textContent = `${plugin.manifest.name}  \u00b7  ESC CLOSES`;
+    const body = document.createElement('div');
+    box.appendChild(chrome);
+    box.appendChild(body);
+    document.body.appendChild(box);
+    this.pluginPanelBox = box;
+    this.placePluginPanel();
+    try {
+      this.pluginPanelMounted = plugin.mount(body, this.pluginPanelApi(plugin));
+    } catch {
+      this.toast.show(`panel "${plugin.manifest.id}" failed to open - the tracker stays up.`, activeColors().ward);
+      this.closePluginPanel();
+      return;
+    }
+    box.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closePluginPanel();
+      }
+    });
+    this.pageMenu?.render();
+  }
+
+  /**
+   * Install a plugin bundle from a URL the user approved: fetch, then run
+   * the zip flow. Writing the `plugin install` line WAS the approval —
+   * remote installs are off by default, so nothing fetches unasked — and a
+   * fetch that fails is a toast, never a broken song: the script already
+   * applied, and a plugin that did not arrive falls back like any other.
+   */
+  private async installPluginFromUrl(url: string): Promise<void> {
+    this.toast.show(`READING  ${url}...`, activeColors().textDim);
+    const fetched = await fetchPluginBundle(url);
+    if (!fetched.ok) {
+      this.toast.show(fetched.error, activeColors().danger);
+      return;
+    }
+    await this.installPluginFromBytes(fetched.bytes, url);
+  }
+
+  /**
+   * Every plugin manifest this machine holds, first mention wins: the bundle
+   * first (built-ins always win a clash), then seated installed code, then
+   * the library's manifests for code that has not seated. What the lockfile
+   * is held against at open, and where the bundle finds its versions.
+   */
+  private knownPluginManifests(): { id: string; version: string; enabled: boolean }[] {
+    const seen = new Set<string>();
+    const known: { id: string; version: string; enabled: boolean }[] = [];
+    const keep = (id: string, version: string): void => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      known.push({ id, version, enabled: true });
+    };
+    for (const plugin of [...BUILT_IN_INSTRUMENTS, ...BUILT_IN_EFFECTS, ...BUILT_IN_GENERATORS, ...BUILT_IN_PANELS]) {
+      keep(plugin.manifest.id, plugin.manifest.version);
+    }
+    for (const plugin of [...this.installedInstruments, ...this.installedEffects, ...this.installedPanelCode.plugins]) {
+      keep(plugin.manifest.id, plugin.manifest.version);
+    }
+    for (const manifest of loadPluginLibrary()) keep(manifest.id, manifest.version);
+    return known;
+  }
+
+  /** The lockfile this save writes: pinned versions for every plugin the song names. */
+  private songPluginVersions(): Record<string, string> {
+    const known = new Map(this.knownPluginManifests().map((manifest) => [manifest.id, manifest.version]));
+    const locked: Record<string, string> = {};
+    for (const id of songPluginIds(this.song)) {
+      const version = known.get(id);
+      if (version !== undefined) locked[id] = version;
+    }
+    return locked;
+  }
+
+  /**
+   * Pack the song as a bundle: its JSON, every named third-party plugin's
+   * manifest plus source, every named sample as a `.wav`. Built-ins travel
+   * by reference — every build carries them — so a song that names only
+   * built-ins packs its JSON alone and still opens everywhere.
+   */
+  private exportSongBundle(): { fileName: string; bytes: Uint8Array; details: string[] } | { error: string } {
+    const sources = loadInstalledPluginCode();
+    const library = new Map(loadPluginLibrary().map((manifest) => [manifest.id, manifest]));
+    const plugins: { id: string; manifestJson: unknown; moduleText: string; entry: string }[] = [];
+    const skipped: string[] = [];
+    for (const id of songPluginIds(this.song)) {
+      if (BUILT_IN_INSTRUMENTS.some((plugin) => plugin.manifest.id === id)
+        || BUILT_IN_EFFECTS.some((plugin) => plugin.manifest.id === id)
+        || BUILT_IN_GENERATORS.some((plugin) => plugin.manifest.id === id)
+        || BUILT_IN_PANELS.some((plugin) => plugin.manifest.id === id)) continue;
+      const manifest = library.get(id);
+      const text = sources[id];
+      if (manifest === undefined || text === undefined) {
+        skipped.push(id);
+        continue;
+      }
+      plugins.push({ id, manifestJson: manifest as unknown, moduleText: text, entry: manifest.entry });
+    }
+    const sampleNames = new Set<string>();
+    for (const track of this.song.tracks) {
+      if (track.sample !== null) sampleNames.add(track.sample);
+    }
+    for (const pad of this.song.machine?.pads ?? []) {
+      if (pad.sample !== null) sampleNames.add(pad.sample);
+    }
+    const samples: { name: string; wavBytes: Uint8Array }[] = [];
+    const missingSamples: string[] = [];
+    for (const name of sampleNames) {
+      const sample = sampleByName(this.samples, name);
+      if (!sample) {
+        missingSamples.push(name);
+        continue;
+      }
+      samples.push({ name, wavBytes: new Uint8Array(encodeWav({ channels: [sample.pcm], sampleRate: sample.rate })) });
+    }
+    const stem = songFileStem(this.song.title);
+    const details = [
+      `${plugins.length} PLUGIN${plugins.length === 1 ? '' : 'S'}  ·  ${samples.length} SAMPLE${samples.length === 1 ? '' : 'S'}`,
+      ...skipped.map((id) => `"${id}" travels by reference - its code is not on this machine.`),
+      ...missingSamples.map((name) => `"${name}" travels by name - its recording is not in the bank.`),
+    ];
+    return {
+      fileName: songBundleFileName(stem),
+      bytes: buildSongBundle({
+        songJson: songToJson(this.song, { volume: this.volume }, this.songPluginVersions()),
+        plugins,
+        samples,
+      }),
+      details,
+    };
+  }
+
+  /**
+   * Open a song bundle: seat every plugin it carries, load every sample,
+   * then open the song — so a bundle moved to another browser plays, not
+   * falls back. One undo step for the song; the installs beside it are app
+   * state like every install, and each says what it did in the report.
+   */
+  private async openBundleAction(name: string, bytes: ArrayBuffer): Promise<FileActionResult> {
+    const parsed = parseSongBundle(new Uint8Array(bytes));
+    if (!parsed.ok) {
+      return { status: `COULD NOT OPEN  ${name}`, details: [parsed.error], tone: 'error' };
+    }
+    const report: string[] = [];
+    let registry = loadPluginLibrary().map((manifest) => ({ manifest, enabled: true }));
+    for (const plugin of parsed.bundle.plugins) {
+      const result = await installBundledPlugin(registry, plugin.manifestJson, plugin.moduleText);
+      if (!result.ok) {
+        report.push(`"${plugin.id}" did not install: ${result.error}`);
+        continue;
+      }
+      registry = result.install.registry;
+      savePluginSource(result.install.entry.manifest.id, `bundle:${name}`);
+      if (result.install.seated !== null) {
+        this.seatInstalledPlugin(result.install.seated);
+        saveInstalledPluginCode(plugin.id, plugin.moduleText);
+        savePluginFingerprint(plugin.id, result.install.fingerprint);
+        report.push(
+          `"${plugin.id}" installed from the bundle.${pendingGrantNote(result.install.seated.plugin.manifest, loadPluginGrants())}`,
+        );
+      } else {
+        report.push(result.install.unseatedReason ?? `"${plugin.id}" installed without code.`);
+      }
+    }
+    savePluginLibrary(registry.map((entry) => entry.manifest));
+    this.pushInstalledCodeToEngines();
+    for (const sample of parsed.bundle.samples) {
+      const result = this.openSampleAction(sample.name, sample.wavBytes.slice().buffer);
+      if (result.tone === 'error') report.push(`${sample.name}: ${result.status}`);
+    }
+    const opened = this.openFileAction(`${name} / song.json`, parsed.bundle.songJson);
+    return { ...opened, details: [...report, ...(opened.details ?? [])] };
+  }
+
+  /** Put the plugin overlay away, unmounting what it mounted. */
+  private closePluginPanel(): void {
+    this.pluginPanelSession.close();
+    try {
+      this.pluginPanelMounted?.unmount();
+    } catch {
+      // An unmount that throws is already the failure being cleaned up — the
+      // box is removed either way, so a broken teardown cannot stick an overlay.
+    }
+    this.pluginPanelMounted = null;
+    this.lastPanelTransport = null;
+    if (this.pluginPanelBox !== null) {
+      this.pluginPanelBox.remove();
+      this.pluginPanelBox = null;
+    }
+    this.pageMenu?.render();
+  }
+
+  /** Repaint the open overlay from the song it now has (or the theme). */
+  private refreshPluginPanel(): void {
+    const mounted = this.pluginPanelMounted;
+    const current = this.pluginPanelSession.current;
+    if (mounted?.update === undefined || current === null) return;
+    const plugin = findPanelCode(this.installedPanelCode, BUILT_IN_PANELS, current.replace(/^plugin:/, ''));
+    if (plugin === null) return;
+    try {
+      mounted.update(this.pluginPanelApi(plugin));
+    } catch {
+      // A repaint that throws closes rather than sticks: the song changed under
+      // a panel that cannot follow it, and the tracker underneath is the truth.
+      this.closePluginPanel();
+    }
+  }
+
+  /** Map the overlay onto the canvas's current on-screen rect. */
+  private placePluginPanel(): void {
+    const box = this.pluginPanelBox;
+    if (box === null) return;
+    const r = this.game.canvas.getBoundingClientRect();
+    const sx = r.width / 720;
+    const sy = r.height / 405;
+    const s = box.style;
+    s.left = `${Math.round(r.left + 380 * sx)}px`;
+    s.top = `${Math.round(r.top + 50 * sy)}px`;
+    s.width = `${Math.round(320 * sx)}px`;
+    s.maxHeight = `${Math.round(300 * sy)}px`;
+  }
+
+  /** The song as a panel may read it: names and counts, never cells. */
+  private pluginPanelSong(): PanelSongView {
+    const tracks = this.song.tracks.map((track, index) => {
+      let notes = 0;
+      for (const pattern of this.song.patterns) {
+        for (const row of pattern.steps) {
+          const cell = row[index];
+          if (cell !== undefined && cellNotes(cell).length > 0) notes += 1;
+        }
+      }
+      return { name: track.name, notes };
+    });
+    return {
+      title: this.song.title,
+      tracks,
+      machineHits: this.song.machine === null ? 0 : countMachineHits(this.song.machine),
+    };
+  }
+
+  /** What a panel may touch: the digest, the theme, its knobs, transport, words, away. */
+  private pluginPanelApi(plugin: PanelPlugin): PanelApi {
+    const c = activeColors();
+    const sounding = this.engine.playStep;
+    const rows = patternRows(this.song);
+    return {
+      song: this.pluginPanelSong(),
+      theme: panelThemeDigest(c, activeTextScaleFactor()),
+      params: { ...defaultPluginParams(plugin.manifest) },
+      transport: panelTransport(this.engine.playing, sounding, rows),
+      notify: (message: string) => this.toast.show(message, c.ward),
+      close: () => this.closePluginPanel(),
+    };
   }
 
   /**
@@ -1791,6 +2509,7 @@ export class TrackerScene extends Phaser.Scene {
       setLane: (index, lane) => this.setLaneAction(index, lane),
       addLane: (track, target) => this.addLaneAction(track, target),
       removeLane: (index) => this.removeLaneAction(index),
+      pluginKnobs: (track) => this.pluginKnobsFor(track),
     });
   }
 
@@ -1811,12 +2530,31 @@ export class TrackerScene extends Phaser.Scene {
     this.commitLanes();
   }
 
+  /**
+   * The plugin knobs a lane may move on a channel: the ids its instrument
+   * declares, plus any the channel already turned that the manifest never
+   * declared — a newer minor's knob still deserves a lane, moving nothing
+   * until the code arrives. Empty on a channel with no plugin instrument.
+   */
+  private pluginKnobsFor(track: number): string[] {
+    const channel = this.song.tracks[track - 1];
+    if (!channel?.plugin) return [];
+    const manifest = this.pluginManifestFor(channel.plugin);
+    const declared = manifest?.params.map((param) => param.id) ?? [];
+    const extra = Object.keys(channel.pluginParams ?? {}).filter((id) => !declared.includes(id));
+    return [...declared, ...extra];
+  }
+
   /** Add a lane for a channel and target, spanning the whole song; one undo step. */
   private addLaneAction(track: number, target: AutomationTargetId): string {
     if (this.song.automation.length >= MAX_AUTOMATION_LANES) {
       return `A SONG HOLDS AT MOST ${MAX_AUTOMATION_LANES} LANES.`;
     }
-    const info = AUTOMATION_TARGET_BY_ID[target];
+    // The table row, or the synthetic one for a `param.<knob>` target: the
+    // page only offers knobs the channel declares, but the guard stays — a
+    // target neither names is a refusal, not a crash.
+    const info = automationTargetInfo(target);
+    if (!info) return `"${target}" IS NOT SOMETHING A LANE CAN MOVE.`;
     this.record();
     const bars = Math.max(1, this.song.order.length);
     const lane = tidyLane({ track, target, from: info.min, to: info.max, startBar: 1, endBar: bars });
@@ -1832,7 +2570,7 @@ export class TrackerScene extends Phaser.Scene {
     this.record();
     this.song.automation = this.song.automation.filter((_one, at) => at !== index);
     this.commitLanes();
-    return `REMOVED ${AUTOMATION_TARGET_BY_ID[lane.target]?.label ?? lane.target} LANE`;
+    return `REMOVED ${automationTargetInfo(lane.target)?.label ?? lane.target} LANE`;
   }
 
   /** Re-point the engine's lanes and repaint the arranger. */
@@ -3337,6 +4075,7 @@ export class TrackerScene extends Phaser.Scene {
     this.voiceMenu.hide();
     this.patchMenu.hide();
     this.instrumentBrowser.hide();
+    this.pluginBrowser.hide();
     this.appearanceMenu.hide();
     this.drumView.hide();
     if (wasOpen) return;
@@ -3367,6 +4106,7 @@ export class TrackerScene extends Phaser.Scene {
       || this.helpOverlay?.isOpen === true
       || this.historyMenu?.isOpen === true
       || this.instrumentBrowser?.isOpen === true
+      || this.pluginBrowser?.isOpen === true
       || this.fileMenu?.isOpen === true
       || this.songMenu?.isOpen === true
       || this.voiceMenu?.isOpen === true
@@ -4097,6 +4837,30 @@ export class TrackerScene extends Phaser.Scene {
     // recording per channel, and a name with no file behind it becomes "play the
     // built-in one-shot", which is the fallback the whole design leans on.
     this.pushBankToEngine();
+    // And which plugin instrument each channel plays. Handed over as the song's
+    // references plus the instruments the app carries, because the two live in
+    // different places and only the app knows which of them it has: the engine
+    // resolves the pair into one plugin per channel, and a name with no code
+    // behind it becomes "play the built-in voice", which is the fallback the
+    // whole design leans on.
+    this.engine.setPluginVoices(
+      this.song.tracks.map((track) => track.plugin),
+      [...BUILT_IN_INSTRUMENTS, ...this.installedInstruments],
+    );
+    // And which plugin effects each channel seats. Handed over as the song's
+    // chains plus the effects the app carries, because the two live in
+    // different places and only the app knows which of them it has: the engine
+    // resolves the pair into one insert chain per channel, and a name with no
+    // code behind it plays dry for that slot, which is the fallback the whole
+    // design leans on.
+    this.engine.setPluginFx(
+      this.song.tracks.map((track) => track.fx),
+      [...BUILT_IN_EFFECTS, ...this.installedEffects],
+    );
+    // And each channel's plugin knob values. Handed over whole, like everything
+    // else the engine takes: a channel with none plays manifest defaults, and
+    // `param.<knob>` lanes move them per note from here.
+    this.engine.setPluginParams(this.song.tracks.map((track) => track.pluginParams));
     this.engine.setFeels(
       this.song.tracks.map((track) => track.groove),
       this.song.tracks.map((track) => track.humanize),
@@ -4694,6 +5458,20 @@ export class TrackerScene extends Phaser.Scene {
         // be told what is loaded. A kit this machine does not have exports on the
         // four presets, which is what the app would have played.
         kits: this.savedKits,
+        // And the plugin instruments, for the same reason the bank is here: a
+        // song NAMES its instrument and the code is the app's, so an export has
+        // to be told what is loaded. A plugin this machine does not have exports
+        // on the channel's built-in voice, which is what the app would have played.
+        plugins: [...BUILT_IN_INSTRUMENTS, ...this.installedInstruments],
+        // And the plugin effects, for the same reason the instruments are here:
+        // a song SEATS its inserts and the code is the app's, so an export has
+        // to be told what is loaded. An effect this machine does not have
+        // exports dry for that slot, which is what the app would have played.
+        fxPlugins: [...BUILT_IN_EFFECTS, ...this.installedEffects],
+        // And each channel's plugin knob values, so an export turns the knobs
+        // where the app did — a channel with none exports at manifest defaults,
+        // which is what the app would have played.
+        pluginParams: this.song.tracks.map((track) => track.pluginParams),
         // The loop region, if one is marked or a script set one: bars 8 to 15
         // render as bars 8 to 15, and the whole song is the silence about it.
         bounce: this.bounceRange(),
@@ -4714,12 +5492,13 @@ export class TrackerScene extends Phaser.Scene {
   }
 
   /**
-   * The song as one `.wav` per channel, in a `.zip`, for EXPORT STEMS.
+   * The song as one `.wav` per channel — per output bus where a plugin
+   * separates its outs — in a `.zip`, for EXPORT STEMS.
    *
    * A mix is a decision this app made; a stem set is the song before anybody
    * made it, which is what somebody mixing elsewhere needs. Each channel is
    * rendered alone through the SAME graph the mix came out of — see
-   * `renderStemsToPcm` — so a stem sounds like the part that was played rather
+   * `renderOutStemsToPcm` — so a stem sounds like the part that was played rather
    * than like a second opinion about it, and the archive is written by
    * `zipStore` because a browser can only put one file on the disk at a time.
    *
@@ -4735,7 +5514,13 @@ export class TrackerScene extends Phaser.Scene {
     const refusal = stemRefusal(this.song);
     if (refusal) return { error: refusal };
     try {
-      const plan = stemPlan(this.song, songFileStem(this.song.title));
+      // A channel whose plugin declares several outs becomes one file per
+      // bus, named from the manifest — so a kit's kick and click leave as
+      // separate stems. Anything else plans exactly as it always has.
+      const trackOuts = this.song.tracks.map((track) =>
+        track.plugin ? (this.pluginManifestFor(track.plugin)?.outs ?? null) : null,
+      );
+      const plan = stemPlan(this.song, songFileStem(this.song.title), trackOuts);
       const options = {
         volume: this.volume,
         font: this.activeFont(),
@@ -4748,6 +5533,9 @@ export class TrackerScene extends Phaser.Scene {
         // And the kits of your own, so a stem set of a kit channel is the drums
         // that were heard and not the four presets underneath them.
         kits: this.savedKits,
+        // And each channel's plugin knob values, so a stem carries the part as
+        // it was heard rather than at manifest defaults.
+        pluginParams: this.song.tracks.map((track) => track.pluginParams),
         // A stem set of a region is a stem set of that region: the three writers
         // of audio agree about which bars "these bars" means.
         bounce: this.bounceRange(),
@@ -4763,15 +5551,15 @@ export class TrackerScene extends Phaser.Scene {
       const match =
         mix === null || target === null ? null : matchLoudness(mix.channels, mix.sampleRate, target);
       const gain = match?.gain ?? 1;
-      const rendered = await renderStemsToPcm(this.song, stemTracks(plan), options);
+      const rendered = await renderOutStemsToPcm(this.song, stemRequests(plan), options);
       const files = plan.map((entry, index) => ({
         name: entry.name,
-        bytes: new Uint8Array(encodeWav(gainPcm(rendered[index]!.pcm, gain))),
+        bytes: new Uint8Array(encodeWav(gainPcm(rendered[index]!, gain))),
       }));
       return {
         bytes: zipStore(files),
         names: files.map((file) => file.name),
-        seconds: rendered[0] ? pcmSeconds(rendered[0].pcm) : 0,
+        seconds: rendered[0] ? pcmSeconds(rendered[0]) : 0,
         details: this.loudnessDetails(match),
       };
     } catch (error) {
@@ -4966,6 +5754,7 @@ export class TrackerScene extends Phaser.Scene {
     this.midiLastPulseAt = 0;
     this.midiClockBpm = null;
     this.midiTakeRecorded = false;
+    this.midiKnobRecorded = false;
   }
 
   /**
@@ -4995,6 +5784,7 @@ export class TrackerScene extends Phaser.Scene {
   private handleMidiMessage(message: MidiInMessage): void {
     switch (message.kind) {
       case 'noteOn': this.playMidiNote(message.note, message.velocity); break;
+      case 'control': this.turnMidiKnob(message.controller, message.value); break;
       case 'clock': this.followMidiClock(); break;
       case 'start':
       case 'continue':
@@ -5036,6 +5826,42 @@ export class TrackerScene extends Phaser.Scene {
     // which case the repaint would land on a different bar's step.
     const slot = stepToSlot(this.song, step);
     if (slot.pattern === this.patternIndex) this.refreshStep(slot.row, track);
+    this.updateHistoryButtons();
+  }
+
+  /**
+   * Turn one plugin knob from a controller, on the channel under the cursor.
+   *
+   * Controllers 16–23 (`midiCcKnobIndex`) reach the channel's plugin
+   * instrument's knobs in manifest declaration order; anything else, a channel
+   * with no plugin, or a slot past the manifest's last knob is ignored rather
+   * than half-honoured. Heard through `syncAudioGraph` like every other sound
+   * edit, so the filter opens WHILE the slider moves rather than on release.
+   *
+   * One undo step for the whole TWIST, the MIDI-take bargain one scope over: a
+   * slider sends dozens of ticks, and Ctrl+Z once per tick is not undo. A tick
+   * that changes nothing banks nothing, so resting a finger on a slider costs
+   * no step at all. Works in LISTENING as well as RECORDING, for the reason a
+   * played note sounds in both: the sound is the point, and knob turns are
+   * sound edits like F4's, not notes the take owns.
+   */
+  private turnMidiKnob(controller: number, value: number): void {
+    const index = midiCcKnobIndex(controller);
+    if (index === null) return;
+    const track = this.song.tracks[this.cursor.track];
+    if (!track || track.plugin == null) return;
+    const param = this.pluginManifestFor(track.plugin)?.params[index];
+    if (!param) return;
+    const wanted = midiCcToKnobValue(value, param.min, param.max);
+    if (wanted === (track.pluginParams?.[param.id] ?? param.default)) return;
+    if (!this.midiKnobRecorded) {
+      this.record();
+      this.midiKnobRecorded = true;
+    }
+    track.pluginParams = { ...(track.pluginParams ?? {}), [param.id]: wanted };
+    this.syncAudioGraph();
+    this.trackList.setTracks(this.song.tracks);
+    this.updateInspector();
     this.updateHistoryButtons();
   }
 
@@ -5532,8 +6358,13 @@ export class TrackerScene extends Phaser.Scene {
       // against `PAGE_NAMES`, so the cast is the language's promise and not a
       // guess; `setPage` is what the dropdown itself calls, so a script and a
       // click move the app the same way. A view setting, so no undo step.
-      this.setPage(settings.page as PageId);
+      // A plugin reference opens its overlay instead — resolved HERE, where
+      // the registry lives, so an id this machine has no code for leaves the
+      // tracker up with a notice rather than refusing a song that plays.
+      if (isPanelPageRef(settings.page)) this.openPluginPanel(settings.page);
+      else this.setPage(settings.page as PageId);
     }
+    this.refreshPluginPanel();
     if (settings.liveQuantize !== undefined) {
       // How long a LIVE launch waits — a SESSION setting beside `page`, not song
       // data: it is how somebody is performing rather than anything written down,
@@ -5581,6 +6412,27 @@ export class TrackerScene extends Phaser.Scene {
     // which is the same thing that happens when either of them is missing.
     if (settings.sampleLoad !== undefined) {
       void this.loadSampleFromUrl(settings.sampleLoad);
+    }
+    // And the PLUGIN. `plugin install` arrives over the network exactly as
+    // `sample load` does, so it is fired and forgotten: writing the line was
+    // the approval, and the song is already applied while the code lands — a
+    // channel naming the plugin simply starts playing it when it seats.
+    if (settings.pluginInstall !== undefined) {
+      void this.installPluginFromUrl(settings.pluginInstall);
+    }
+    // And the UNINSTALL. `plugin uninstall` names an id the way `plugin
+    // install` names a URL: writing the line was the approval, and the song
+    // is already applied — channels naming the id fall back with a notice
+    // while the shelves forget it, so the line never edits the song.
+    if (settings.pluginUninstall !== undefined) {
+      this.uninstallPluginById(settings.pluginUninstall);
+    }
+    // And the ANSWER. `plugin allow/deny` writes one grant decision the way
+    // the lines above write everything else: the line was the approval, and
+    // answers are person-level state beside the song, so they persist under
+    // their own key and never enter the song or a bundle.
+    if (settings.pluginGrant !== undefined) {
+      this.applyPluginGrant(settings.pluginGrant.id, settings.pluginGrant.permission, settings.pluginGrant.allow);
     }
     if (settings.sampleImport) {
       this.fileMenu.openSamplePicker();
@@ -5819,6 +6671,10 @@ export class TrackerScene extends Phaser.Scene {
     this.clearSolos();
     this.clearBounce();
     this.song = result.song;
+    // The lockfile speaks: every pinned plugin is held against what this
+    // machine has now, and each mismatch joins the open report in words — a
+    // match is silence, because the common case is not news.
+    const migration = pluginMigrationNotices(result.pluginVersions ?? {}, this.knownPluginManifests());
     this.patternIndex = 0;
     this.cursor = { row: 0, track: 0 };
     // A file that came from a SCRIPT can carry the app settings a script can set
@@ -5830,7 +6686,7 @@ export class TrackerScene extends Phaser.Scene {
     this.updateHistoryButtons();
     return {
       status: `OPENED  ${name}`,
-      details: [`${result.kind.toUpperCase()}  ·  ${describeSong(this.song)}`, 'CTRL+Z PUTS THE PREVIOUS SONG BACK.'],
+      details: [`${result.kind.toUpperCase()}  ·  ${describeSong(this.song)}`, 'CTRL+Z PUTS THE PREVIOUS SONG BACK.', ...migration],
       tone: 'ok',
     };
   }
@@ -6175,6 +7031,90 @@ export class TrackerScene extends Phaser.Scene {
         had ? `REPLACED THE \"${name}\" YOU ALREADY HAD.` : `NOW ONE OF YOUR KITS. WRITE \`kit ${name}\` IN A SCRIPT TO PLAY IT IN ANY SONG.`,
         'The song now plays it \u2014 Ctrl+Z takes that back; the kit stays saved.',
         remembered ? '' : 'FOR THIS SESSION ONLY: STORAGE IS UNAVAILABLE.',
+      ].filter((line) => line !== ''),
+      tone: 'ok',
+    };
+  }
+
+  /**
+   * The manifest for a plugin id, wherever the app holds it: the bundle, the
+   * installed code, or the stored library (whose manifests carry their params
+   * even when the code never arrived). Null is code this machine does not have
+   * — which is not a refusal, because a preset for it still loads and its
+   * values wait for the code the way a song's do.
+   */
+  private pluginManifestFor(id: string): TrackletPluginManifest | null {
+    for (const plugin of BUILT_IN_INSTRUMENTS) {
+      if (plugin.manifest.id === id) return plugin.manifest;
+    }
+    for (const plugin of this.installedInstruments) {
+      if (plugin.manifest.id === id) return plugin.manifest;
+    }
+    for (const manifest of loadPluginLibrary()) {
+      if (manifest.id === id) return manifest;
+    }
+    return null;
+  }
+
+  /**
+   * The cursor channel's plugin knob values as a preset document, for SAVE PRESET.
+   *
+   * What goes in it is `presetfile.ts`'s business: the plugin's id plus the
+   * values the channel turned, and nothing about the mix they sat in. The name
+   * comes from the CHANNEL, the patch's reason exactly. A channel with no
+   * plugin instrument has no knobs a preset could turn, so refusing is the only
+   * honest answer — while a channel at manifest defaults still writes (an empty
+   * map that says which plugin it belongs to).
+   */
+  private presetFile(): { fileName: string; text: string; detail: string } | { error: string } {
+    const track = this.song.tracks[this.cursor.track];
+    if (!track) return { error: 'no channel is selected, so there are no knobs to save.' };
+    if (!track.plugin) return { error: `${track.name} plays no plugin instrument, so there are no knobs to save.` };
+    const values = track.pluginParams ?? {};
+    const name = tidyPresetName(track.name);
+    return {
+      fileName: presetFileName(name),
+      text: presetToJson({ name, plugin: track.plugin, values: { ...values } }),
+      detail: presetAbout({ plugin: track.plugin, values }),
+    };
+  }
+
+  /**
+   * Read a preset file and turn those knobs on the cursor's channel.
+   *
+   * The patch's bargain one scope over, with one difference the format forces:
+   * a preset names its plugin, so the channel is pointed at it when it plays
+   * another — the values always land on the instrument they were written for,
+   * as ONE undo step. Unknown knobs are dropped against the manifest (a preset
+   * from a newer minor), and a preset for code this machine does not have still
+   * loads, its values waiting for the code the way a song's do.
+   */
+  private openPresetAction(fileName: string, text: string): FileActionResult {
+    const track = this.song.tracks[this.cursor.track];
+    if (!track) return { status: 'NO CHANNEL IS SELECTED', tone: 'error' };
+    const read = presetFromJson(text);
+    if (!read.ok) {
+      return { status: `COULD NOT READ  ${fileName}`, details: read.errors, tone: 'error' };
+    }
+    const name = read.name === PRESET_NAME_FALLBACK ? presetNameFromFile(fileName) : read.name;
+    const manifest = this.pluginManifestFor(read.plugin);
+    const values = applyPresetValues(manifest, read.values);
+    const dropped = Object.keys(read.values).length - Object.keys(values).length;
+    const channel = `${this.cursor.track + 1}  ${track.name}`;
+    const retuned = track.plugin !== read.plugin;
+    this.editSound((next) => {
+      next.plugin = read.plugin;
+      next.pluginParams = Object.keys(values).length > 0 ? { ...values } : null;
+    });
+    this.toast.show(`PRESET  ${name}  \u2192  ${track.name}`, activeColors().ward);
+    return {
+      status: `LOADED  ${name}  ONTO CHANNEL ${channel}`,
+      details: [
+        presetAbout({ plugin: read.plugin, values }),
+        retuned ? `The channel now plays ${read.plugin}.` : 'The channel already played it, so only the knobs moved.',
+        manifest === null ? 'This machine has no code for it yet: the values wait for the install.' : '',
+        dropped > 0 ? `${dropped} knob${dropped === 1 ? '' : 's'} this build never had ${dropped === 1 ? 'was' : 'were'} left off.` : '',
+        'The level, the pan, the group and the pocket are yours and did not move.',
       ].filter((line) => line !== ''),
       tone: 'ok',
     };
@@ -6713,6 +7653,7 @@ export class TrackerScene extends Phaser.Scene {
     this.engine.setMachineBars(machineBarsForSong(this.song));
     // A live take ends with the transport, so the NEXT one is its own Ctrl+Z.
     this.midiTakeRecorded = false;
+    this.midiKnobRecorded = false;
     this.lastPlayStep = -1;
     this.setViewPlayhead(-1);
     this.keyboard.setSounding([]);
@@ -6842,6 +7783,15 @@ export class TrackerScene extends Phaser.Scene {
     // it, the same rule a menu follows.
     if (this.pageMenu?.isOpen && this.pageMenu.handleKey(e)) return;
 
+    // A plugin overlay owns Escape while it is up — the box hears it when
+    // focused, and this hears it everywhere else — so one press always puts
+    // the panel away and never also acts on the screen under it.
+    if (e.code === 'Escape' && this.pluginPanelBox !== null) {
+      e.preventDefault();
+      this.closePluginPanel();
+      return;
+    }
+
     // F5 is the MIXER, and it is a SCREEN: the same key shows it and takes it
     // away, exactly as `F8` cycles the pattern's reading. It is read here, in
     // front of the menu table, because it is the one F-key that changes page
@@ -6930,6 +7880,10 @@ export class TrackerScene extends Phaser.Scene {
     }
     if (this.instrumentBrowser.isOpen) {
       this.instrumentBrowser.handleKey(e);
+      return;
+    }
+    if (this.pluginBrowser.isOpen) {
+      this.pluginBrowser.handleKey(e);
       return;
     }
     if (this.mcpPanel.isOpen) {
@@ -7089,6 +8043,7 @@ export class TrackerScene extends Phaser.Scene {
       || this.voiceMenu.isOpen
       || this.patchMenu.isOpen
       || this.instrumentBrowser.isOpen
+      || this.pluginBrowser.isOpen
       || this.historyMenu.isOpen
       || this.helpOverlay.isOpen;
   }
@@ -7218,6 +8173,20 @@ export class TrackerScene extends Phaser.Scene {
         }
         this.setViewPlayhead(row);
         this.keyboard.setSounding(rowNotes(this.currentPattern, row));
+      }
+    }
+    // Transport-live panels: the open overlay repaints when motion or the bar
+    // changes — read here, once per frame and only while a panel is up, so a
+    // meter cannot disagree with the transport it names. Song, theme and
+    // text-scale repaints keep their own callers; this one fires on transport
+    // change alone, and a repaint that throws still closes rather than sticks.
+    if (this.pluginPanelMounted?.update !== undefined && this.pluginPanelSession.current !== null) {
+      const sounding = this.engine.playStep;
+      const transport = panelTransport(this.engine.playing, sounding, patternRows(this.song));
+      const last = this.lastPanelTransport;
+      if (last === null || last.playing !== transport.playing || last.bar !== transport.bar) {
+        this.lastPanelTransport = transport;
+        this.refreshPluginPanel();
       }
     }
   }

@@ -44,6 +44,7 @@ export * from './mix';
 export * from './script';
 export * from './songfile';
 export * from './patchfile';
+export * from './presetfile';
 export * from './kitfile';
 export * from './midiIn';
 export * from './midi';

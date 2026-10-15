@@ -13,7 +13,7 @@ import {
 
 import {
   AUTOMATION_TARGETS,
-  AUTOMATION_TARGET_BY_ID,
+  automationTargetInfo,
   clampAutomationValue,
   type AutomationLane,
   type AutomationTargetId,
@@ -102,6 +102,12 @@ export interface ArrangerHandlers {
   setLane: (index: number, lane: AutomationLane) => void;
   /** Add a fresh lane for a channel and target; answers a status line. */
   addLane: (track: number, target: AutomationTargetId) => string;
+  /**
+   * The plugin knobs the channel's instrument declares, by hand — the ids a
+   * `param.<knob>` lane may move. Empty on a channel with no plugin
+   * instrument, which is every channel until one is seated.
+   */
+  pluginKnobs: (track: number) => string[];
   /** Remove the lane at an index; answers a status line. */
   removeLane: (index: number) => string;
 }
@@ -397,11 +403,23 @@ export class ArrangerView {
     this.render();
   }
 
+  /**
+   * Every target the lane editor may edit on the selected channel: the fixed
+   * table, then the channel's plugin knobs as `param.<knob>` — so TAB reaches
+   * a knob the channel's own instrument declares, and a channel with no plugin
+   * cycles exactly the table it always did.
+   */
+  private cycleTargets(): AutomationTargetId[] {
+    const knobs = this.handlers.pluginKnobs(this.handlers.selectedChannel() + 1);
+    return [...AUTOMATION_TARGETS.map((target) => target.id), ...knobs.map((knob) => `param.${knob}` as AutomationTargetId)];
+  }
+
   /** Cycle the target the lane editor edits, wrapping at both ends. */
   private cycleTarget(direction: number): void {
-    const at = AUTOMATION_TARGETS.findIndex((target) => target.id === this.target);
-    const next = (at + direction + AUTOMATION_TARGETS.length) % AUTOMATION_TARGETS.length;
-    this.target = AUTOMATION_TARGETS[next].id;
+    const targets = this.cycleTargets();
+    const at = targets.findIndex((target) => target === this.target);
+    const next = (at + direction + targets.length) % targets.length;
+    this.target = targets[next];
     this.selectedLane = -1;
     this.status = '';
     this.render();
@@ -440,7 +458,7 @@ export class ArrangerView {
     if (from === lane.from && to === lane.to) return;
     this.handlers.beginLaneEdit();
     this.handlers.setLane(this.selectedLane, { ...lane, from, to });
-    this.status = `${AUTOMATION_TARGET_BY_ID[lane.target]?.label ?? lane.target}  ${from} -> ${to}`;
+    this.status = `${automationTargetInfo(lane.target)?.label ?? lane.target}  ${from} -> ${to}`;
     this.render();
   }
 
@@ -865,7 +883,7 @@ export class ArrangerView {
 
   /** The lane editor: the value axis, the grid, and the lane's line and handles. */
   private drawLaneEditor(song: Song, view: TimelineView, c: UiColors): void {
-    const info = AUTOMATION_TARGET_BY_ID[this.target];
+    const info = automationTargetInfo(this.target);
     const track = this.handlers.selectedChannel() + 1;
     const trackName = (song.tracks[this.handlers.selectedChannel()]?.name ?? `CH ${track}`).slice(0, 12);
     const g = this.laneGfx;
@@ -936,7 +954,7 @@ export class ArrangerView {
     // The footer: what the last edit said, or how to make a lane.
     const picked = this.handlers.lanes()[this.selectedLane];
     const note = picked
-      ? `${(AUTOMATION_TARGET_BY_ID[picked.target]?.label ?? picked.target).toUpperCase()}  ${picked.from} -> ${picked.to}  \u00b7  BARS ${picked.startBar}-${picked.endBar}`
+      ? `${(automationTargetInfo(picked.target)?.label ?? picked.target).toUpperCase()}  ${picked.from} -> ${picked.to}  \u00b7  BARS ${picked.startBar}-${picked.endBar}`
       : this.status !== ''
         ? this.status
         : drawn === 0
@@ -954,7 +972,7 @@ export class ArrangerView {
     const color = trackColor(channel, c);
     const name = (song.tracks[channel]?.name ?? `CH ${track}`).slice(0, 12);
     const lane = this.selectedLaneValue();
-    const info = AUTOMATION_TARGET_BY_ID[this.target];
+    const info = automationTargetInfo(this.target);
 
     this.pushText(INS_X, INSPECTOR.y + 6, 'THIS AUTOMATION', c.ooze, 8);
 

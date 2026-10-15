@@ -1091,6 +1091,7 @@ automate 5 level 0 100 bars 1 to 4    # a fade-in over the first four bars
 automate 3 gate 0 90 bars 9 to 16     # the last section tightens
 automate 1 thick 20 80 bars 1 to 1    # one bar: a set, not a walk
 automate 3 drift 10 90 bars 8 to 15   # a worn tape that tires as the song goes
+automate 1 param.cutoff 20 90 bars 8 to 15  # a plugin knob turning with the build
 ```
 
 A **lane**: one value that MOVES, instead of a value that simply is. Everything
@@ -1100,7 +1101,7 @@ the filter opening across a build, the fade at the end, the pad that thickens as
 the chorus arrives. None of those are notes, so no amount of pattern editing can
 write them.
 
-`TARGET` is one of twelve words:
+`TARGET` is one of twelve words — or a plugin knob, spelled `param.<knob>`:
 
 | Target | What moves | Range | Bottom → top |
 | --- | --- | --- | --- |
@@ -1125,6 +1126,14 @@ wow and flutter of a worn transport (see the `track` line below), and it is in
 this list only because it is a plain VALUE rather than an effect node — the
 effects, `pan` and the sends are still refused, because a curve cannot fade in a
 node that does not exist at zero.
+
+A `param.<knob>` lane moves one knob of the channel's plugin instrument —
+`param.cutoff`, `param.detune`, any lowercase word a manifest would accept as a
+param id — walked `0..100` over the channel's own values, so two lanes on two
+knobs compose and a lane on one knob leaves every other where it was. The lane
+cannot see the manifest the knob belongs to, so the walked value is coerced
+against the real range when the note plays; a knob no manifest declares still
+loads and moves nothing until the code arrives.
 
 **The bars are slots of the `order`**, 1-based, the same numbers `order` and
 `tempo … at BAR` use — so a lane is written against the song's own form rather
@@ -1572,6 +1581,88 @@ there — the newest file is the one you just picked.
 - **`sample load` needs no leading slash.** A path is resolved against the page,
   so `samples/break.wav` means the file beside the app.
 
+### `plugin install URL` — fetch a plugin bundle you approve
+
+```
+plugin install "https://example.com/reverb.tracklet-plugin"
+```
+
+A **plugin** arrives as a `.tracklet-plugin` zip — a manifest plus its entry
+module — and this is the one line that fetches one. Remote installs are OFF
+by default: nothing in the app fetches a plugin unasked, so writing the line
+IS the approval, the way `sample load` approves fetching a recording. The
+fetch runs when the script is applied (fired and forgotten, beside the song
+rather than inside it), and whatever lands installs through the zip flow:
+registered, seated, remembered, said in words.
+
+**Only `http:` and `https:` go out.** Anything else is refused before a
+packet forms — a plugin URL is a web address, never a scheme trick — and a
+fetch that fails is a notice naming the URL and the HTTP status, never a
+broken song: the script already applied, and a plugin that did not arrive
+falls back like any other.
+
+**Rules worth knowing:**
+
+- **Four subcommands: `install`, `uninstall`, `allow` and `deny`.** A bare
+  `plugin`, or anything but those four, is refused with the shape of the line.
+- **A session setting, like `sample load`.** No file carries one, so opening
+  someone's song never installs anything onto your machine.
+- **Quoted or not.** A URL is full of slashes and dots, so the line joins
+  every word after `install` back into one address either way.
+
+### `plugin uninstall ID` — forget an installed plugin everywhere
+
+```
+plugin uninstall com.example.reverb
+```
+
+The kill-switch you can type: one id forgotten on all five shelves — the
+registry entry, the remembered code, the recorded origin, the grant answers
+and the weighed fingerprint — through the one door in
+`src/plugins/uninstall.ts`, with its live code unseated from the banks both
+clocks read. Writing the line IS the approval, the way `plugin install` is:
+nothing uninstalls unasked.
+
+**The song is never edited.** Channels naming the id fall back to built-ins
+with a named notice (the soundfont bargain), and reinstalling restores the
+song as written. An id this machine never installed is a notice naming it,
+never a refusal — a line may name code another machine holds.
+
+**Rules worth knowing:**
+
+- **One id, one word.** An id is dotted, never spaced: nothing after
+  `uninstall`, or more than one word, is refused with the shape of the line.
+- **A session setting, like `plugin install`.** No file carries one, so opening
+  someone's song never uninstalls anything off your machine.
+
+### `plugin allow ID WORD` / `plugin deny ID WORD` — answer one permission
+
+```
+plugin allow com.example.reverb storage
+plugin deny com.example.reverb storage
+```
+
+The grant screen you can type: one permission word (`network` or `storage`)
+granted to, or taken back from, one plugin. Writing the line IS the approval,
+the way `plugin install` is — and answers are person-level state beside the
+song, so they persist under their own key and never enter the song or a
+bundle. A word granted twice (or denied twice) writes the same map back and
+says so, rather than pretending; the last answer in a script wins.
+
+**The id is not checked at parse.** An id this machine never installed takes
+its answer anyway — a sparse row for a stranger costs nothing, and the row
+reads as answers only beside a manifest that declares the word. A reinstall
+asks again, so a decision made for one copy never silently covers its
+replacement.
+
+**Rules worth knowing:**
+
+- **One id and one word, exactly.** Nothing after the subcommand, one word,
+  or three is refused with the shape of the line — before anything is
+  answered.
+- **The word is the closed list.** `network` or `storage`; anything else is
+  refused naming the list, so a typo cannot grant silence.
+
 ### `record NAME` / `record trim` / `record loop` — capture a take, and shape it
 
 ```
@@ -1908,6 +1999,27 @@ a page leaves the screen where it is, and the last `page` line wins.
 The name is checked against the pages THIS build has, so `page live` is refused in
 words by a build that predates the LIVE page rather than switching to a screen
 that does not exist.
+
+A plugin panel opens the same way, with its id after a `plugin:` prefix:
+
+```script
+new
+song "PANEL PAGE"
+key A minor
+tempo 128
+tracks 1
+track 1 "LEAD" voice lead
+pattern 1 "A"
+C-4
+page plugin:com.example.meter-panel
+```
+
+The reference is spelling-checked like a voice (`voice plugin:<id>`) and
+resolved when it OPENS: an id this machine has no code for leaves the tracker
+up with a notice naming the id — the fallback, never a refusal — so a script
+written where the panel lives still applies where it does not. Like every
+`page`, it is a session setting: no file carries one, and a build that says
+`53` refuses the reference.
 
 ### `instrument use NAME` — which imported instrument `wave font` plays
 
@@ -3019,6 +3131,95 @@ as three short lines a few cents apart rather than three walls of knobs.
 1 (`track 2 voice pad`). For a layer above it, write the waveform and the knobs
 out.
 
+### `fx TRACK ID AMOUNT` — seat a plugin effect on one channel
+
+A channel's inserts are a **chain**: the first entry processes the note's
+samples first and the next processes the result. `fx 1 com.example.bitcrush-plus
+45` seats that effect on channel 1 at 45 — `0` is off, `100` is fully wet, the
+same bargain as the ten built-in effects. A channel may seat up to **4**.
+
+```script
+new
+song "CRUSHED LEAD"
+tempo 140
+tracks 2
+
+track 1 "LEAD" voice plugin:com.example.supersaw
+fx 1 com.example.bitcrush-plus 45
+track 2 "BASS" voice bass
+
+C-4 C-2
+.   .
+E-4 .
+.   .
+G-4 .
+.   .
+```
+
+```
+fx 1 com.example.bitcrush-plus 45
+fx 1 com.example.bitcrush-plus clear
+fx 1 clear
+```
+
+- **An id the app has no code for is kept, and plays dry.** The plugin library
+  is the app's, so a song written on another machine still opens — the slot
+  plays dry here and the reference survives a save, the sample's bargain one
+  scope over.
+- **Inserts process plugin renders.** A slot runs where the channel's instrument
+  already does — at schedule time, on the note's own samples — so live and
+  export cannot disagree. A chain seated on a channel with no plugin instrument
+  is kept in the song and the file but is inert until synth-to-buffer lands.
+- **`clear`** (or `remove`) takes one slot off; `fx 1 clear` takes the whole
+  chain off. Either is the whole line or nothing.
+
+### `params TRACK KNOB VALUE` — turn one knob of a channel's plugin instrument
+
+A plugin instrument's knobs are the plugin's — the manifest declares them —
+and the VALUES are the song's: `params 1 cutoff 70` turns `cutoff` on channel
+1 toward 70, `0..100` like every insert. One knob per line, in the order the
+knobs were turned.
+
+```script
+new
+song "OPEN FILTER"
+tempo 140
+tracks 2
+
+track 1 "LEAD" voice plugin:com.example.supersaw
+params 1 cutoff 70
+params 1 decay 45
+track 2 "BASS" voice bass
+
+C-4 C-2
+.   .
+E-4 .
+.   .
+G-4 .
+.   .
+```
+
+```
+params 1 cutoff 70
+params 1 cutoff clear
+params 1 clear
+```
+
+- **A knob no manifest declares is kept, and moves nothing.** Which knob an id
+  names is the manifest's business, so a song written against a newer minor
+  still opens — the value rides along and the engine coerces it when the note
+  plays, the sample's bargain one scope over. The id is one lowercase word,
+  the shape a manifest would accept.
+- **A knob the song never turns plays its manifest default.** Only turned knobs
+  are stored, so a channel that never turns one is byte-for-byte the channel
+  it always was.
+- **`clear`** (or `remove`, or `off`) takes one knob back to its default;
+  `params 1 clear` takes every override off. Either is the whole line or
+  nothing.
+- **A lane can move one across bars:** `automate 1 param.cutoff 20 90 bars 8
+  to 15` turns `cutoff` on channel 1 from 20 to 90 across those bars, over the
+  channel's own values — the lane moves only the knob it names.
+
 ### `mute N` / `unmute N` — mute a channel
 
 ```
@@ -3287,6 +3488,54 @@ The dials are SONG data: a song that stores any writes an `arp` key and file
 version `42`, and round-trips through `SAVE AS SCRIPT` and back. The NOTES a write
 produced are ordinary cells — printed as grid rows, never as `arp` lines — because
 an arp is notes in an order once written.
+
+### `generate …` — two composers that write music
+
+```script
+new
+song "FIRST GENERATORS"
+key A minor
+tempo 128
+tracks 2
+track 1 "LEAD" voice lead
+track 2 "BASS" voice bass
+progression Am F C G
+machine steps 16
+generate euclid pad 1 5
+generate bass 0 2
+pattern 1 "A"
+C-4 .
+E-4 .
+```
+
+`generate` asks a plugin that WRITES music — a generator — to fill part of the
+song in. This build seats two: `euclid` spreads a rhythm over a drum-machine
+pad, and `bass` hangs a bassline on the song's chord loop. Both are
+CONSTRUCTIVE: what they write is ordinary pad rows and ordinary cells, the
+same bargain `arp write` and the followers make — so the grid, the file,
+`Ctrl+Z` and an export all see the same thing, and no file version moves. A
+preview (`generator.describe` over the API) and a write call the one function,
+so the two cannot disagree.
+
+- **`generate euclid pad PAD PULSES [`rotate N`] [`bar N`]** — a Euclidean
+  rhythm: `PULSES` hits spread as evenly as the machine's steps allow on `PAD`
+  (`E(3, 8)` is `9..9..9.`). `rotate N` turns the rhythm forward `N` steps, and
+  `bar N` writes a bar past the first. The count is checked against the machine
+  size the lines above left, so a count that would not fit is refused rather
+  than truncated in silence.
+- **`generate bass ROW TRACK [`rhythm NAME`]`** — the loop's ROOTS from `ROW` on
+  `TRACK`, in the pattern `pattern` selected: `four` walks every chord, `half`
+  every other start (the half-note bass under a ballad), `offbeat` each start
+  half a hold late (the skank's answer). Like a follower it needs a loop —
+  nothing to follow is the follower's own refusal — and like a follower it
+  leaves every other row of the channel alone.
+
+The same two composers live behind `generator.generate` over the API (and the
+MCP tools it becomes), so an agent composes headlessly with the same functions
+the script word calls. Third-party generators arrive through
+`src/plugins/generator.ts` (`defineGenerator`, the `expand` contract, the
+constructive-only trust gate); the two here are the proofs, carried as
+built-ins and documented beside the instruments in `doc/11-plugins.md`.
 
 ### `drum ROW TRACK DRUM [VELOCITY] [ARTICULATION]` — write one drum hit
 

@@ -37,6 +37,8 @@ song like the ones below.
 | [`08-agent-prompt.md`](08-agent-prompt.md) | **If you want an AI to write the music:** handoff prompts to paste, how to write a brief, and the loop to iterate in. |
 | [`09-song-files.md`](09-song-files.md) | Saving and opening: the `F2` file menu, and both formats a song travels in — the `.txt` script and the `.json` song file. |
 | [`10-instruments.md`](10-instruments.md) | **Recorded instruments:** importing a Noislet sound pack or a SoundFont, the instrument list, and playing them with `wave font`. |
+| [`11-plugins.md`](11-plugins.md) | **Plugins:** the author's handbook — manifest, params, permissions, and the hello-panel starter. |
+| [`12-plugin-api.md`](12-plugin-api.md) | **Plugin API reference:** every host function, its contract, and the docs rules tests enforce. |
 
 ## The one-paragraph version
 

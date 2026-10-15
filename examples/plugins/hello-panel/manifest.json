@@ -1,0 +1,14 @@
+{
+  "id": "com.example.hello-panel",
+  "name": "Hello Panel",
+  "version": "1.0.0",
+  "kind": "panel",
+  "entry": "./index.ts",
+  "apiVersion": 1,
+  "params": [
+    { "id": "amount", "label": "Amount", "min": 0, "max": 100, "default": 50 }
+  ],
+  "description": "The smallest plugin that loads.",
+  "author": "Example Author",
+  "license": "MIT"
+}

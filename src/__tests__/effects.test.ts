@@ -55,6 +55,10 @@ import {
   MACHINE_SONG_FILE_VERSION,
   SCENES_SONG_FILE_VERSION,
   ARP_SONG_FILE_VERSION,
+  PLUGIN_SONG_FILE_VERSION,
+  FX_SONG_FILE_VERSION,
+  PLUGIN_LOCK_SONG_FILE_VERSION,
+  PLUGIN_PARAMS_SONG_FILE_VERSION,
   SONG_FILE_VERSION_MAX,
   scriptCapabilities,
   songFromJson,
@@ -860,10 +864,15 @@ describe('the nine effects, on the whole mix', () => {
     // The LIVE page's SCENES claimed the newest slot after the section machine
     // bar, so `machine section bar` is one below the ceiling now rather than at it.
     expect(MACHINE_SECTION_BAR_SONG_FILE_VERSION).toBe(SCENES_SONG_FILE_VERSION - 1);
-    // And the ARP page's DIALS claimed the newest slot after the scenes, so the
-    // live set is one below the ceiling now rather than at it.
+    // And the ARP page's DIALS claimed the newest slot after the scenes, a PLUGIN INSTRUMENT claimed 43 after that, a
+    // SEATED PLUGIN EFFECT claimed 44 after that, and TURNED PLUGIN KNOBS claimed 46 after the lock, so the live
+    // set is four below the ceiling now rather than at it.
+    expect(ARP_SONG_FILE_VERSION).toBe(PLUGIN_SONG_FILE_VERSION - 1);
     expect(SCENES_SONG_FILE_VERSION).toBe(ARP_SONG_FILE_VERSION - 1);
-    expect(ARP_SONG_FILE_VERSION).toBe(SONG_FILE_VERSION_MAX);
+    expect(FX_SONG_FILE_VERSION).toBe(PLUGIN_LOCK_SONG_FILE_VERSION - 1);
+    expect(PLUGIN_SONG_FILE_VERSION).toBe(FX_SONG_FILE_VERSION - 1);
+    expect(PLUGIN_LOCK_SONG_FILE_VERSION).toBe(PLUGIN_PARAMS_SONG_FILE_VERSION - 1);
+    expect(PLUGIN_PARAMS_SONG_FILE_VERSION).toBe(SONG_FILE_VERSION_MAX);
   });
 
   it('opens an older file with a clean mix, and refuses a newer one', () => {

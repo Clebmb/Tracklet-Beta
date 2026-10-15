@@ -1,0 +1,15 @@
+{
+  "id": "com.example.ep-piano",
+  "name": "EP Piano",
+  "version": "0.9.0",
+  "kind": "instrument",
+  "entry": "./index.ts",
+  "apiVersion": 1,
+  "params": [
+    { "id": "brightness", "label": "Brightness", "min": 0, "max": 100, "default": 55 },
+    { "id": "decay", "label": "Decay", "min": 0, "max": 100, "default": 70 }
+  ],
+  "description": "Two-operator FM electric piano. The second proof a plugin can be an instrument.",
+  "author": "Example Author",
+  "license": "MIT"
+}

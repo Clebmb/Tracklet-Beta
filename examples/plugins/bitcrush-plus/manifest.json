@@ -1,0 +1,15 @@
+{
+  "id": "com.example.bitcrush-plus",
+  "name": "Bitcrush Plus",
+  "version": "0.9.0",
+  "kind": "effect",
+  "entry": "./index.ts",
+  "apiVersion": 1,
+  "params": [
+    { "id": "bits", "label": "Bits", "min": 0, "max": 100, "default": 50 },
+    { "id": "rate", "label": "Rate", "min": 0, "max": 100, "default": 35 }
+  ],
+  "description": "Fewer bits on a slower clock. The first proof a plugin can be an effect.",
+  "author": "Example Author",
+  "license": "MIT"
+}

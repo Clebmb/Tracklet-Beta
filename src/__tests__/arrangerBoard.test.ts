@@ -137,6 +137,17 @@ describe('a lane row reads like a fader', () => {
     expect(laneValueAtY(bogus, 0, top, height)).toBe(0);
     expect(laneYAtValue(bogus, 40, top, height)).toBe(top);
   });
+
+  it('reads a plugin knob row like a fader, 0..100', () => {
+    expect(laneYAtValue('param.cutoff', 100, top, height)).toBe(top);
+    expect(laneYAtValue('param.cutoff', 0, top, height)).toBe(top + height);
+    for (const value of [0, 25, 50, 75, 100]) {
+      const y = laneYAtValue('param.cutoff', value, top, 100);
+      expect(laneValueAtY('param.cutoff', y, top, 100)).toBe(value);
+    }
+    expect(laneValueAtY('param.cutoff', -1000, top, height)).toBe(100);
+    expect(laneValueAtY('param.cutoff', 1000, top, height)).toBe(0);
+  });
 });
 
 describe('resizing a lane', () => {
@@ -232,5 +243,16 @@ describe('which lane rows a channel draws', () => {
     expect(model.indexOf('bright')).toBeLessThan(model.indexOf('level'));
     expect(laneTargetsUsed(lanes, 2)).toEqual(['gate']);
     expect(laneTargetsUsed(lanes, 3)).toEqual([]);
+  });
+
+  it('draws a row for a knob a lane moves, after the fixed targets', () => {
+    const lanes: AutomationLane[] = [
+      lane({ track: 1, target: 'param.decay' }),
+      lane({ track: 1, target: 'bright' }),
+      lane({ track: 1, target: 'param.cutoff' }),
+      lane({ track: 1, target: 'param.cutoff' }),
+    ];
+    expect(laneTargetsUsed(lanes, 1)).toEqual(['bright', 'param.decay', 'param.cutoff']);
+    expect(laneTargetsUsed(lanes, 2)).toEqual([]);
   });
 });

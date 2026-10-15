@@ -46,6 +46,8 @@ import {
   AGENT_STDIO_LABEL,
   AGENT_STEPS,
   AGENT_SURFACE,
+  TRACKLET_REPOSITORY_URL,
+  isHostedTracklet,
   agentEndpoint,
   agentHttpConfigLines,
   agentHttpConfigText,
@@ -109,6 +111,7 @@ export class McpPanel {
   private readonly copyUrlButton: Button;
   private readonly copyStdioButton: Button;
   private readonly closeButton: Button;
+  private readonly hosted = typeof window !== 'undefined' && isHostedTracklet(window.location.hostname);
 
   private readonly staticTexts: StaticText[] = [];
   private statusText: Phaser.GameObjects.Text | null = null;
@@ -142,53 +145,71 @@ export class McpPanel {
 
     this.addStatic(MODAL.x + 4, MODAL.y + 2, 'MCP  -  LET AN AI AGENT WRITE MUSIC', 'accent');
 
-    // --- the left column: the three steps -----------------------------------
-    this.addStatic(LEFT_X, 40, 'HOW AN AGENT CONNECTS', 'heading');
-    let y = 56;
-    for (const step of AGENT_STEPS) {
-      this.addStatic(LEFT_X, y, step.label, 'body');
-      this.addStatic(LEFT_X + 6, y + 11, step.text, 'dim');
-      y += 28;
-    }
+    if (this.hosted) {
+      this.addStatic(LEFT_X + 12, 64, 'MCP IS NOT AVAILABLE ON THIS WEB VERSION', 'accent');
+      const paragraphs = [
+        [92, 'The MCP server does not currently work on the web version hosted at caleb.website.'],
+        [138, 'To use Tracklet with its local MCP server, download Tracklet-Beta from GitHub and run it on your own computer. The README includes setup instructions.'],
+        [202, TRACKLET_REPOSITORY_URL],
+        [248, 'The local server works with song files and scripts. It does not directly control the song open in the editor.'],
+      ] as const;
+      for (const [top, text] of paragraphs) {
+        const obj = uiText(scene, LEFT_X + 12, top, text, {
+          size: 8, color: activeColors().textPrimary, wordWrapWidth: MODAL.width - 48,
+        });
+        obj.setDepth(DEPTH_FRONT);
+        this.staticTexts.push({ obj, role: 'body' });
+      }
+    } else {
 
-    // --- the left column: what it can reach, and what it cannot ---------------
-    let surfaceY = y + 4;
-    for (const line of AGENT_SURFACE) {
-      this.addStatic(LEFT_X, surfaceY, line, surfaceY === y + 4 ? 'heading' : 'body');
-      surfaceY += 12;
-    }
-    const caveat = uiText(this.scene, LEFT_X, surfaceY + 10, AGENT_CAVEAT, {
-      size: 8,
-      color: activeColors().textDim,
-      wordWrapWidth: LEFT_W - 4,
-    });
-    caveat.setDepth(DEPTH_FRONT);
-    this.staticTexts.push({ obj: caveat, role: 'dim' });
+      // --- the left column: the three steps -----------------------------------
+      this.addStatic(LEFT_X, 40, 'HOW AN AGENT CONNECTS', 'heading');
+      let y = 56;
+      for (const step of AGENT_STEPS) {
+        this.addStatic(LEFT_X, y, step.label, 'body');
+        this.addStatic(LEFT_X + 6, y + 11, step.text, 'dim');
+        y += 28;
+      }
 
-    // --- the right column: the server, the command, the config ---------------
-    this.addStatic(RIGHT_X, 40, 'THE AGENT SERVER', 'heading');
-    this.addStatic(RIGHT_X, 88, 'START IT WITH', 'heading');
-    this.addStatic(RIGHT_X, 100, agentStartCommand(), 'accent');
-    this.addStatic(RIGHT_X, 124, 'ENDPOINT', 'heading');
-    this.addStatic(RIGHT_X, 136, agentEndpoint(), 'accent');
+      // --- the left column: what it can reach, and what it cannot ---------------
+      let surfaceY = y + 4;
+      for (const line of AGENT_SURFACE) {
+        this.addStatic(LEFT_X, surfaceY, line, surfaceY === y + 4 ? 'heading' : 'body');
+        surfaceY += 12;
+      }
+      const caveat = uiText(this.scene, LEFT_X, surfaceY + 10, AGENT_CAVEAT, {
+        size: 8,
+        color: activeColors().textDim,
+        wordWrapWidth: LEFT_W - 4,
+      });
+      caveat.setDepth(DEPTH_FRONT);
+      this.staticTexts.push({ obj: caveat, role: 'dim' });
 
-    // Two configs, one under the other, each with its own button: a client takes
-    // a URL or it takes a command, and the panel has no way to know which — so it
-    // shows both rather than making one of them "the documentation".
-    this.addStatic(RIGHT_X, 160, AGENT_HTTP_LABEL, 'heading');
-    let configY = 172;
-    for (const line of agentHttpConfigLines()) {
-      this.addStatic(RIGHT_X, configY, line, 'body');
-      configY += CONFIG_LINE_H;
+      // --- the right column: the server, the command, the config ---------------
+      this.addStatic(RIGHT_X, 40, 'THE AGENT SERVER', 'heading');
+      this.addStatic(RIGHT_X, 88, 'START IT WITH', 'heading');
+      this.addStatic(RIGHT_X, 100, agentStartCommand(), 'accent');
+      this.addStatic(RIGHT_X, 124, 'ENDPOINT', 'heading');
+      this.addStatic(RIGHT_X, 136, agentEndpoint(), 'accent');
+
+      // Two configs, one under the other, each with its own button: a client takes
+      // a URL or it takes a command, and the panel has no way to know which — so it
+      // shows both rather than making one of them "the documentation".
+      this.addStatic(RIGHT_X, 160, AGENT_HTTP_LABEL, 'heading');
+      let configY = 172;
+      for (const line of agentHttpConfigLines()) {
+        this.addStatic(RIGHT_X, configY, line, 'body');
+        configY += CONFIG_LINE_H;
+      }
+      this.addStatic(RIGHT_X, 266, AGENT_STDIO_LABEL, 'heading');
+      let stdioY = 278;
+      for (const line of agentStdioConfigLines()) {
+        this.addStatic(RIGHT_X, stdioY, line, 'body');
+        stdioY += CONFIG_LINE_H;
+      }
+      // Why there are two COPY buttons rather than a block to read off the screen.
+      this.addStatic(RIGHT_X, 330, AGENT_RETYPE_NOTE, 'dim');
     }
-    this.addStatic(RIGHT_X, 266, AGENT_STDIO_LABEL, 'heading');
-    let stdioY = 278;
-    for (const line of agentStdioConfigLines()) {
-      this.addStatic(RIGHT_X, stdioY, line, 'body');
-      stdioY += CONFIG_LINE_H;
-    }
-    // Why there are two COPY buttons rather than a block to read off the screen.
-    this.addStatic(RIGHT_X, 330, AGENT_RETYPE_NOTE, 'dim');
 
     // --- buttons -------------------------------------------------------------
     const btnY = MODAL.y + MODAL.height - 26;
@@ -199,9 +220,12 @@ export class McpPanel {
     this.copyStdioButton = new Button(scene, { x: right - 204, y: btnY, width: 100, height: 20 }, 'COPY CMD', { size: 8 });
     this.copyStdioButton.container.setDepth(DEPTH_FRONT);
     this.copyStdioButton.onPress = () => this.copyConfig('command');
-    this.copyUrlButton = new Button(scene, { x: right - 312, y: btnY, width: 100, height: 20 }, 'COPY URL', { size: 8 });
+    this.copyUrlButton = new Button(scene, { x: right - 312, y: btnY, width: this.hosted ? 208 : 100, height: 20 }, this.hosted ? 'VIEW TRACKLET-BETA ON GITHUB' : 'COPY URL', { size: 8 });
     this.copyUrlButton.container.setDepth(DEPTH_FRONT);
-    this.copyUrlButton.onPress = () => this.copyConfig('url');
+    this.copyUrlButton.onPress = () => {
+      if (this.hosted) window.open(TRACKLET_REPOSITORY_URL, '_blank', 'noopener,noreferrer');
+      else this.copyConfig('url');
+    };
     this.checkButton = new Button(scene, { x: RIGHT_X, y: btnY, width: 116, height: 20 }, 'CHECK AGAIN', { size: 8 });
     this.checkButton.container.setDepth(DEPTH_FRONT);
     this.checkButton.onPress = () => this.check();
@@ -228,7 +252,7 @@ export class McpPanel {
     this.flash = null;
     this.setOpen(true);
     this.renderChrome();
-    void this.check();
+    if (!this.hosted) void this.check();
   }
 
   hide(): void {
@@ -270,7 +294,7 @@ export class McpPanel {
 
   /** Ask the server, and paint the answer — unless the panel has been closed. */
   private async check(): Promise<void> {
-    if (this.probing) return;
+    if (this.hosted || this.probing) return;
     this.probing = true;
     this.state = { ...this.state, status: 'checking', reason: null };
     this.renderLive();
@@ -332,9 +356,9 @@ export class McpPanel {
     this.dim.setVisible(open);
     this.frame.setVisible(open);
     this.curtain.setVisible(open);
-    this.checkButton.container.setVisible(open);
+    this.checkButton.container.setVisible(open && !this.hosted);
     this.copyUrlButton.container.setVisible(open);
-    this.copyStdioButton.container.setVisible(open);
+    this.copyStdioButton.container.setVisible(open && !this.hosted);
     this.closeButton.container.setVisible(open);
     for (const entry of this.staticTexts) entry.obj.setVisible(open);
     this.statusText?.setVisible(open);
@@ -365,7 +389,7 @@ export class McpPanel {
     // as one long page that happens to have a gap in the middle.
     const ruleX = RIGHT_X - 8;
     frame.fillStyle(c.textDim, 0.35);
-    frame.fillRect(ruleX, 38, 1, MODAL.height - 82);
+    if (!this.hosted) frame.fillRect(ruleX, 38, 1, MODAL.height - 82);
 
     const roleColor: Record<TextRole, number> = {
       heading: c.textDim,
@@ -380,6 +404,7 @@ export class McpPanel {
 
   /** The three lines that change: the verdict, the detail and the hint. */
   private renderLive(): void {
+    if (this.hosted) return;
     const c = activeColors();
     const theme = activeTheme();
     const statusY = 52;

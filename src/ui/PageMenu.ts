@@ -46,6 +46,15 @@ export interface PageRow {
 }
 
 /**
+ * One seated panel as the dropdown lists it, after the seven screens: the
+ * `page` reference that opens it plus its manifest name in dropdown caps.
+ */
+export interface PanelRow {
+  ref: string;
+  label: string;
+}
+
+/**
  * The dropdown's rows, in the order it shows them.
  *
  * Exported so the scene does not keep a second copy, and so a test can pin the
@@ -69,6 +78,15 @@ export interface PageMenuHandlers {
   current: () => PageId;
   /** The user picked one. The scene is what actually changes the screen. */
   select: (id: PageId) => void;
+  /**
+   * The seated panels, in the order the list shows them after the screens.
+   * Absent when no panel code is seated — the list is seven rows then.
+   */
+  panelRows?: () => PanelRow[];
+  /** The reference of the overlay showing now, or null for the bare tracker. */
+  panelCurrent?: () => string | null;
+  /** The user picked a panel. The scene is what mounts its overlay. */
+  selectPanel?: (ref: string) => void;
   /** The list opened or closed, so the scene can route Escape to it. */
   onOpenChange?: (open: boolean) => void;
 }
@@ -182,7 +200,11 @@ export class PageMenu {
     const c = activeColors();
     const rows = this.handlers.rows();
     const current = this.handlers.current();
-    const currentLabel = rows.find((row) => row.id === current)?.label ?? 'PAGES';
+    const panels = this.handlers.panelRows?.() ?? [];
+    const openPanel = this.handlers.panelCurrent?.() ?? null;
+    const currentLabel = panels.find((panel) => panel.ref === openPanel)?.label
+      ?? rows.find((row) => row.id === current)?.label
+      ?? 'PAGES';
     this.button.setText(currentLabel);
 
     this.gfx.clear();
@@ -192,7 +214,7 @@ export class PageMenu {
     }
 
     this.hint.setVisible(false);
-    const height = rows.length * ROW_H + LIST_PAD * 2;
+    const height = (rows.length + panels.length) * ROW_H + LIST_PAD * 2;
     const list: Rect = { x: PAGE_MENU_RECT.x, y: PAGE_MENU_RECT.y + PAGE_MENU_RECT.height + 2, width: PAGE_MENU_RECT.width, height };
     drawPanel(this.gfx, list, 1, c);
 
@@ -201,12 +223,27 @@ export class PageMenu {
       const button = new Button(
         this.scene,
         { x: list.x + LIST_PAD, y: list.y + LIST_PAD + index * ROW_H, width: list.width - LIST_PAD * 2, height: ROW_H },
-        row.id === current ? `${row.label}  \u00b7` : row.label,
+        row.id === current && openPanel === null ? `${row.label}  \u00b7` : row.label,
         { size: 8 },
       );
       button.onPress = () => {
         this.close();
         this.handlers.select(row.id);
+      };
+      button.container.setDepth(DEPTH_LIST + 1);
+      this.layer.add(button.container);
+      this.rowButtons.push(button);
+    });
+    panels.forEach((panel, index) => {
+      const button = new Button(
+        this.scene,
+        { x: list.x + LIST_PAD, y: list.y + LIST_PAD + (rows.length + index) * ROW_H, width: list.width - LIST_PAD * 2, height: ROW_H },
+        panel.ref === openPanel ? `${panel.label}  \u00b7` : panel.label,
+        { size: 8 },
+      );
+      button.onPress = () => {
+        this.close();
+        this.handlers.selectPanel?.(panel.ref);
       };
       button.container.setDepth(DEPTH_LIST + 1);
       this.layer.add(button.container);

@@ -103,7 +103,7 @@ import {
   type Patch,
   type StackedSound,
 } from '../model/instrument';
-import { automatedDrift, automatedGate, automatedLevel, automatedVoice, type AutomationLane } from '../model/automation';
+import { automatedDrift, automatedGate, automatedLevel, automatedPluginParams, automatedVoice, type AutomationLane } from '../model/automation';
 import { busLevelFor, type Bus } from '../model/bus';
 import { articulationHits, type Articulation } from '../model/articulation';
 import { drumPitch, type DrumId } from '../model/drum';
@@ -114,6 +114,11 @@ import { buildChannelChain, buildMasterChain, type ChannelChain, type MasterChai
 import { machineDucks, machineGain, machineHitsInRange, machineStepSeconds, padStripOptions } from './machine';
 import type { DrumMachine, DrumPad } from '../model/machine';
 import { buildNote, makeNoiseBuffer, noteLength, ownedSampleBuffer, releaseNote, type NoteGraph, type StepNotesFn } from './synth';
+import { pluginEventFor, renderPluginBuffer, resolveTrackPlugins } from './pluginVoice';
+import { resolveTrackFx, type ResolvedTrackFx } from './pluginFx';
+import type { InstrumentPlugin, PluginParamValues } from '../plugins/instrument';
+import type { EffectPlugin } from '../plugins/effect';
+import type { TrackFx } from '../model/song';
 import type { SoundFont } from '../model/soundfont';
 import { sampleByName, type Sample, type SampleWindow } from '../model/sample';
 import { takeSampleWindow, type Take } from '../model/take';
@@ -472,6 +477,31 @@ export class AudioEngine {
    * `machine.pads`, like `padChains`.
    */
   private padSamples: (Sample | null)[] = [];
+  /**
+   * The plugin instrument each channel plays, or null for its built-in sound.
+   *
+   * Resolved once, in `setPluginVoices`, from the app's library and the song's
+   * references — the sample bank's bargain one scope over: a name the library
+   * does not hold resolves to null rather than to a refusal, and the channel
+   * plays the built-in voice its `track.voice` already holds.
+   */
+  private pluginRenders: (InstrumentPlugin | null)[] = [];
+  /**
+   * Each channel's live knob values, index-aligned with the tracks.
+   *
+   * Handed over whole and read per note, like everything else the engine
+   * takes. A channel with no entry plays its plugin at manifest defaults —
+   * which is every channel until presets (M5) and the browser sliders arrive.
+   */
+  private pluginParams: (PluginParamValues | null)[] = [];
+  /**
+   * The insert chain each channel plays through, index-aligned with the tracks.
+   *
+   * Handed over whole and read per note, like everything else the engine
+   * takes. A channel with no entry plays dry — which is every channel until
+   * an `fx` line seats something on it.
+   */
+  private pluginFx: ResolvedTrackFx[][] = [];
   /** One tempo per step of the order; empty when the song has one tempo. */
   private tempos: number[] = [];
   /** The tempo the echo is currently locked to, so it is re-synced only on a change. */
@@ -813,6 +843,50 @@ export class AudioEngine {
   /** The recordings each machine pad plays, one slot per pad, for a test. */
   get machineSampleBank(): readonly (Sample | null)[] {
     return this.padSamples;
+  }
+
+  /**
+   * Hand the engine the plugin instruments: the library plus the song's
+   * references, resolved into one plugin per channel. A channel that names none
+   * — or names one the library does not hold — resolves to null and plays its
+   * built-in voice, which is the fallback the whole design leans on.
+   */
+  setPluginVoices(ids: readonly (string | null)[], plugins: readonly InstrumentPlugin[]): void {
+    this.pluginRenders = resolveTrackPlugins(ids, plugins);
+  }
+
+  /** The plugin each channel plays, one slot per channel, for a test. */
+  get pluginVoiceBank(): readonly (InstrumentPlugin | null)[] {
+    return this.pluginRenders;
+  }
+
+  /**
+   * Hand the engine each channel's live knob values. Entries may be null or
+   * absent — those channels play manifest defaults — so callers pass what
+   * they have and the rest stays musical.
+   */
+  setPluginParams(values: readonly (PluginParamValues | null | undefined)[]): void {
+    this.pluginParams = values.map((value) => value ?? null);
+  }
+
+  /** Each channel's live knob values, one slot per channel, for a test. */
+  get pluginParamBank(): readonly (PluginParamValues | null)[] {
+    return this.pluginParams;
+  }
+
+  /**
+   * Hand the engine the plugin effects: the library plus the song's seated
+   * chains, resolved into one insert chain per channel. A channel that seats
+   * none — or seats only names the library does not hold — resolves to an
+   * empty chain and plays dry, which is the fallback the whole design leans on.
+   */
+  setPluginFx(chains: readonly (readonly TrackFx[] | null | undefined)[], plugins: readonly EffectPlugin[]): void {
+    this.pluginFx = resolveTrackFx(chains, plugins);
+  }
+
+  /** The insert chain each channel plays through, one slot per channel, for a test. */
+  get pluginFxBank(): readonly (readonly ResolvedTrackFx[])[] {
+    return this.pluginFx;
   }
 
   /**
@@ -1740,6 +1814,12 @@ export class AudioEngine {
               ? this.automatedVoiceAt(note.track)
               : this.automatedDrumVoiceAt(note.track, note.drum),
             note.drum,
+            // Where this note sits for a plugin's seed: the step it was
+            // scheduled on and the channel's hold, so the same song renders
+            // the same stream everywhere. Previews pass nothing and vary by
+            // pitch alone.
+            this.nextStep,
+            hold,
           );
         }
         // The pump: if this channel is a ducker, everybody else steps back for
@@ -1845,6 +1925,20 @@ export class AudioEngine {
     return automatedVoice(voice, this.automation, track + 1, this.nextStep, this.rowsPerBar) ?? voice;
   }
 
+  /**
+   * A channel's plugin knob values at the step being scheduled.
+   *
+   * The bank's, moved by whatever `param.<knob>` lanes say — so `automate 2
+   * param.cutoff 20 90 bars 8 to 15` opens the filter across those bars. The
+   * lanes move only the knobs they name over the bank's values, and a channel
+   * with no lanes plays the bank untouched, which is the common case.
+   */
+  private automatedPluginParamsAt(track: number): PluginParamValues | undefined {
+    const base = this.pluginParams[track] ?? null;
+    if (this.automation.length === 0) return base ?? undefined;
+    return automatedPluginParams(base, this.automation, track + 1, this.nextStep, this.rowsPerBar) ?? base ?? undefined;
+  }
+
   /** A channel's gate at the step being scheduled: the lane's, or its own. */
   private automatedGateAt(track: number, own: number): number {
     if (this.automation.length === 0) return own;
@@ -1855,6 +1949,47 @@ export class AudioEngine {
   private automatedDriftAt(track: number, own: number): number {
     if (this.automation.length === 0) return own;
     return automatedDrift(this.automation, track + 1, own, this.nextStep, this.rowsPerBar) ?? own;
+  }
+
+  /**
+   * One note on a plugin instrument: pure samples into a buffer source.
+   *
+   * The graph is a source plus a unity envelope, so the channel's stealing and
+   * release machinery (`releaseNote`, `retire`) works on it unchanged: stopping
+   * a plugin note is stopping its source. Null when the render throws or comes
+   * back empty — the caller then falls through to the built-in voice.
+   */
+  private playPluginNote(
+    track: number,
+    plugin: InstrumentPlugin,
+    midi: number,
+    at: number,
+    velocity: number,
+    step: number | null,
+    holdSteps: number,
+    out: AudioNode,
+  ): NoteGraph | null {
+    const ctx = this.ctx;
+    if (!ctx) return null;
+    try {
+      const source = renderPluginBuffer(
+        ctx,
+        plugin,
+        pluginEventFor(track, step, midi, velocity, holdSteps),
+        ctx.sampleRate,
+        at,
+        this.automatedPluginParamsAt(track),
+        this.pluginFx[track] ?? [],
+      );
+      if (!source) return null;
+      const env = ctx.createGain();
+      env.gain.value = 1;
+      source.connect(env);
+      env.connect(out);
+      return { sources: [source], nodes: [env], env };
+    } catch {
+      return null;
+    }
   }
 
   private playNote(
@@ -1871,10 +2006,40 @@ export class AudioEngine {
     drift: number,
     automated: VoiceParams | null = null,
     drum: DrumId | null = null,
+    step: number | null = null,
+    holdSteps = 1,
   ): void {
     const ctx = this.ctx;
     const out = this.chains[track]?.input ?? this.chains[0]?.input;
     if (!ctx || !out) return;
+
+    // A channel on a plugin instrument renders rather than synthesizes: the
+    // plugin's pure samples through a buffer source into the channel's OWN
+    // input, so level, pan, sends, effects and duck treat it exactly like a
+    // built-in voice. A render that throws — or comes back empty — falls
+    // through to the built-in voice below: the fallback, never silence. The
+    // channel is then unseated, so a broken plugin costs one note, not every
+    // note after it.
+    const plugin = this.pluginRenders[track] ?? null;
+    if (plugin !== null) {
+      const graph = this.playPluginNote(track, plugin, midi, at, velocity, step, holdSteps, out);
+      if (graph !== null) {
+        const held = this.trackVoices.get(track) ?? [];
+        while (held.length >= clampPoly(this.polys[track] ?? DEFAULT_POLY)) {
+          const give = voiceToSteal(held);
+          if (give < 0) break;
+          releaseNote(held[give].graph, at);
+          held.splice(give, 1);
+        }
+        this.voices.add(graph);
+        held.push({ graph, startedAt: at, velocity });
+        this.trackVoices.set(track, held);
+        const primary = graph.sources[0];
+        if (primary) primary.onended = () => this.retire(graph, track);
+        return;
+      }
+      this.pluginRenders[track] = null;
+    }
 
     // How many notes this channel may hold. ONE is the app's own history: a new
     // note takes the one still ringing, the way a monophonic synth or a real wind

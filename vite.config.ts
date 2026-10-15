@@ -37,19 +37,26 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 
 const uiSrc = fileURLToPath(new URL('./vendor/phaser-ui-canvas/src', import.meta.url));
 const phaserEsm = fileURLToPath(new URL('./node_modules/phaser/dist/phaser.esm.js', import.meta.url));
-const phaserEsmMin = fileURLToPath(new URL('./node_modules/phaser/dist/phaser.esm.min.js', import.meta.url));
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(() => ({
   base: './',
   plugins: [kitStorage()],
   resolve: {
     alias: [
       { find: /^phaser-ui-canvas$/, replacement: `${uiSrc}/index.ts` },
       { find: /^phaser-ui-canvas\/(.*)$/, replacement: `${uiSrc}/$1` },
-      { find: /^phaser$/, replacement: command === 'serve' ? phaserEsmMin : phaserEsm },
+      // The non-minified ESM build in BOTH modes: one Phaser in dev and prod,
+      // so the two cannot disagree about the framework they run — the
+      // live/export parity the app promises.
+      { find: /^phaser$/, replacement: phaserEsm },
     ],
     dedupe: ['phaser'],
   },
+  // Never prebundle Phaser: its ESM build ships webpack-style sections with
+  // `module.exports` inside, and esbuild's CJS interop duplicates the classes
+  // — the Scene's plugin manager then misses `getDefaultScenePlugins` and dev
+  // never reaches `create()`. Served directly, the file boots as shipped.
+  optimizeDeps: { exclude: ['phaser'] },
   server: {
     port: 5200,
     strictPort: false,

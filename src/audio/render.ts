@@ -46,7 +46,7 @@
  * last sound.
  */
 
-import { automatedDrift, automatedGate, automatedLevel, automatedVoice } from '../model/automation';
+import { automatedDrift, automatedGate, automatedLevel, automatedPluginParams, automatedVoice } from '../model/automation';
 import { firstLayer, patchForTrack, patchFromVoice, patchWithVoice, voiceOfPlainLayer } from '../model/instrument';
 import { channelGain } from '../model/mix';
 import { busLevelFor, channelBusLevels } from '../model/bus';
@@ -78,11 +78,16 @@ import { kitVoice, type UserKit } from '../model/kit';
 import type { SoundFont } from '../model/soundfont';
 import { NO_SAMPLES, sampleByName, type SampleBank, type SampleWindow } from '../model/sample';
 import { takeSampleWindow, type Take } from '../model/take';
+import type { StemRequest } from '../model/stems';
 import { buildChannelChain, buildMasterChain, type ChannelChain } from './chain';
 import { machineActive } from '../model/machine';
 import { machineBarsForSong, machineDucks, machineGain, machineHitsInRange, machineStepSeconds, padStripOptions } from './machine';
 import { buildRoom, type Room } from './room';
 import { buildNote, makeNoiseBuffer, noteLength, releaseNote, type NoteGraph } from './synth';
+import { pluginEventFor, renderPluginBuffer, resolveTrackPlugins } from './pluginVoice';
+import { resolveTrackFx } from './pluginFx';
+import type { InstrumentPlugin, PluginParamValues } from '../plugins/instrument';
+import type { EffectPlugin } from '../plugins/effect';
 import type { PcmAudio } from './wav';
 
 /** What a render needs to know that the song does not say. */
@@ -113,6 +118,17 @@ export interface RenderOptions {
    * being exactly the mix.
    */
   onlyTrack?: number;
+  /**
+   * Render only this output bus of the stemmed channel's plugin — the per-out
+   * stem option — or every bus when it is left out.
+   *
+   * 0-based, in manifest `outs` order, and meaningful only beside `onlyTrack`:
+   * a caller asking for a bus the render does not have gets silence for that
+   * note rather than a refusal, the stem's bargain (a missing bus is an empty
+   * file, never a failed export). Ignored without `onlyTrack`, because a bus
+   * is only addressable on the channel it leaves.
+   */
+  onlyBus?: number;
   /**
    * Render only these BARS of the order — the loop region — or the whole song
    * when it is absent or null.
@@ -155,6 +171,36 @@ export interface RenderOptions {
    * without the file is the performance that machine would have played.
    */
   kits?: readonly UserKit[];
+  /**
+   * The plugin instruments the app holds, so an exported channel that NAMES one
+   * plays it instead of its fallback.
+   *
+   * The plugin's OWN bargain, one scope over the sample one above: a song names
+   * its instrument and the code lives in the app, so an export has to be told
+   * which instruments are loaded. A name this library does not hold falls back
+   * to the channel's built-in voice, exactly as the live engine does, so an
+   * export made on a machine without the plugin is the performance that machine
+   * would have played.
+   */
+  plugins?: readonly InstrumentPlugin[];
+  /**
+   * Each channel's live knob values, index-aligned with the song's tracks.
+   *
+   * A channel with no entry exports its plugin at manifest defaults — the same
+   * rule the live engine plays by, so an export is the song you heard even
+   * where the app held no tweaks.
+   */
+  pluginParams?: readonly (PluginParamValues | null | undefined)[];
+  /**
+   * The plugin effects the app holds, so an exported channel that SEATS one
+   * plays through it instead of dry.
+   *
+   * The instrument's bargain one scope over: a song seats its inserts and the
+   * code lives in the app, so an export has to be told which effects are
+   * loaded. A name this library does not hold plays dry for that slot,
+   * exactly as the live engine does.
+   */
+  fxPlugins?: readonly EffectPlugin[];
 }
 
 /** A context that can render offline, or null where the browser has none. */
@@ -400,6 +446,20 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
   // what keeps an old song's WAV byte-for-byte what it was.
   const heldByTrack: { graph: NoteGraph; startedAt: number; velocity: number }[][] =
     song.tracks.map(() => []);
+  // One plugin per channel, resolved once up front like the sample bank: a name
+  // the library does not hold is null, and the channel exports its built-in
+  // voice — the performance a machine without the plugin would have played.
+  const trackPlugins = resolveTrackPlugins(
+    song.tracks.map((track) => track.plugin),
+    options.plugins ?? [],
+  );
+  // One insert chain per channel, resolved once up front like the instruments:
+  // a name the library does not hold plays dry for that slot, and the channel
+  // exports the performance a machine without the effect would have played.
+  const trackFx = resolveTrackFx(
+    song.tracks.map((track) => track.fx),
+    options.fxPlugins ?? [],
+  );
 
   for (let repeat = 0; repeat < repeats; repeat++) {
     // Where this repeat of the region begins. Named apart from the per-note
@@ -535,7 +595,52 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
               held.splice(give, 1);
             }
           }
-          const graph = buildNote(
+          // A channel on a plugin instrument renders rather than synthesizes:
+          // the same pure samples the live engine plays, through a source and
+          // a unity envelope into the channel's own input. A render that throws
+          // — or comes back empty — unseats the channel and falls through to
+          // the built-in voice below, the way the live engine does.
+          let graph: NoteGraph | null = null;
+          const plugin = trackPlugins[note.track] ?? null;
+          // A per-out stem isolates one bus of the STEMMED channel only: every
+          // other channel still renders whole (its ducks have to land), routed
+          // offstage as stems have always done.
+          const bus = soloed !== null && note.track === soloed ? options.onlyBus : undefined;
+          if (plugin !== null) {
+            try {
+              // The bank's knob values, moved by whatever `param.<knob>` lanes
+              // say at this step — the same merge the live engine schedules,
+              // so an export turns the knobs exactly where the app did.
+              const base = options.pluginParams?.[note.track] ?? null;
+              const knobs = automatedPluginParams(base, lanes, note.track + 1, step, perBar) ?? base ?? undefined;
+              const source = renderPluginBuffer(
+                ctx,
+                plugin,
+                pluginEventFor(note.track, step, note.midi, sounding, hold),
+                sampleRate,
+                hitWhen,
+                knobs,
+                trackFx[note.track] ?? [],
+                bus,
+              );
+              if (source !== null) {
+                const env = ctx.createGain();
+                env.gain.value = 1;
+                source.connect(env);
+                env.connect(chain.input);
+                graph = { sources: [source], nodes: [env], env };
+              }
+            } catch {
+              graph = null;
+            }
+            // An isolated bus that comes back empty is SILENCE, never fallback:
+            // a missing bus is an empty file, and unseating the plugin (or
+            // falling through to the built-in voice) would put another part's
+            // sound in this bus's file. Whole-channel renders keep the old
+            // bargain: throw or empty unseats and falls through below.
+            if (graph === null && bus === undefined) trackPlugins[note.track] = null;
+          }
+          if (graph === null && bus === undefined) graph = buildNote(
             ctx,
             // The lane moved the voice this note plays — the drum's or the
             // channel's — and either way it is LAYER 1 that is rebuilt, so a
@@ -578,7 +683,9 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
               sampleWindow: windowFor(sampleByName(options.samples ?? NO_SAMPLES, track.sample)),
             },
           );
-          held.push({ graph, startedAt: hitWhen, velocity: sounding });
+          // An isolated bus that came back empty holds nothing to steal or
+          // release — silence keeps no seat in the polyphony count.
+          if (graph !== null) held.push({ graph, startedAt: hitWhen, velocity: sounding });
         });
         // The pump, written into the export at the note's own time: the same
         // arithmetic the live engine schedules, from the same function — and one
@@ -660,6 +767,33 @@ export async function renderStemsToPcm(
     stems.push({ track, pcm: await renderSongToPcm(song, { ...options, onlyTrack: track }) });
   }
   return stems;
+}
+
+/**
+ * Every entry of a stem plan, rendered one at a time — channels and buses.
+ *
+ * The per-out half of `renderStemsToPcm`: a request with `out: null` is the
+ * whole channel, one with an index isolates that bus of the channel's plugin
+ * (silence where the render has no such bus). Sequential for the same reason
+ * stems are, and in plan order, so `rendered[i]` is always `requests[i]`'s
+ * sound and the file names can never drift from the audio.
+ */
+export async function renderOutStemsToPcm(
+  song: Song,
+  requests: readonly StemRequest[],
+  options: RenderOptions = {},
+): Promise<PcmAudio[]> {
+  const rendered: PcmAudio[] = [];
+  for (const request of requests) {
+    rendered.push(
+      await renderSongToPcm(song, {
+        ...options,
+        onlyTrack: request.track,
+        onlyBus: request.out ?? undefined,
+      }),
+    );
+  }
+  return rendered;
 }
 
 /** How long a render of this song will be, in seconds. The UI shows it. */

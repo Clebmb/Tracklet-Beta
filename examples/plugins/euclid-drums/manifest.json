@@ -1,0 +1,12 @@
+{
+  "id": "com.example.euclid-drums",
+  "name": "Euclid Drums",
+  "version": "0.9.0",
+  "kind": "generator",
+  "entry": "./index.ts",
+  "apiVersion": 1,
+  "params": [],
+  "description": "Euclidean rhythms for a drum-machine pad. The first proof a plugin can write music.",
+  "author": "Example Author",
+  "license": "MIT"
+}
