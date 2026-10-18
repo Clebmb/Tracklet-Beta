@@ -98,6 +98,7 @@ describe('the bundled instruments', () => {
     expect(BUILT_IN_INSTRUMENTS.map((plugin) => plugin.manifest.id)).toEqual([
       'com.example.supersaw',
       'com.example.ep-piano',
+      'com.example.acid-bass',
     ]);
     const ep = BUILT_IN_INSTRUMENTS[1]!;
     // The contract now returns one bus or many: the EP is mono, so unwrap it.

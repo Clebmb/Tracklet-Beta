@@ -18,6 +18,8 @@ import supersawManifestJson from '../../examples/plugins/supersaw/manifest.json'
 import { renderNote as renderSupersaw } from '../../examples/plugins/supersaw/index';
 import epPianoManifestJson from '../../examples/plugins/ep-piano/manifest.json';
 import { renderNote as renderEpPiano } from '../../examples/plugins/ep-piano/index';
+import acidBassManifestJson from '../../examples/plugins/acid-bass/manifest.json';
+import { renderNote as renderAcidBass } from '../../examples/plugins/acid-bass/index';
 import bitcrushManifestJson from '../../examples/plugins/bitcrush-plus/manifest.json';
 import { processBlock as processBitcrush } from '../../examples/plugins/bitcrush-plus/index';
 import euclidManifestJson from '../../examples/plugins/euclid-drums/manifest.json';
@@ -48,6 +50,7 @@ function seatedEffect(manifestJson: unknown, processBlock: EffectPlugin['process
 export const BUILT_IN_INSTRUMENTS: readonly InstrumentPlugin[] = [
   seated(supersawManifestJson, renderSupersaw),
   seated(epPianoManifestJson, renderEpPiano),
+  seated(acidBassManifestJson, renderAcidBass),
 ];
 
 /** The ids the app carries, for messages that list them. */

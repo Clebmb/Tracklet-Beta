@@ -1,0 +1,15 @@
+{
+  "format": "tracklet-plugin-preset",
+  "version": 1,
+  "name": "Deep Roller",
+  "plugin": "com.example.acid-bass",
+  "values": {
+    "cutoff": 35,
+    "reso": 30,
+    "envmod": 45,
+    "accent": 40,
+    "drive": 15,
+    "wave": 20,
+    "decay": 60
+  }
+}

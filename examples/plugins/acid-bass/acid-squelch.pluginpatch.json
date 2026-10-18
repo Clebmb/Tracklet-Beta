@@ -1,0 +1,15 @@
+{
+  "format": "tracklet-plugin-preset",
+  "version": 1,
+  "name": "Acid Squelch",
+  "plugin": "com.example.acid-bass",
+  "values": {
+    "cutoff": 70,
+    "reso": 75,
+    "envmod": 85,
+    "accent": 80,
+    "drive": 35,
+    "wave": 0,
+    "decay": 40
+  }
+}
