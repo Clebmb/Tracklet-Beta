@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { applyScript } from '../model/script';
-import { createSong, patternBeat } from '../model/song';
+import { createSong, patternBeat, patternLength } from '../model/song';
 import { PATTERN_BEAT_SONG_FILE_VERSION, songFromJson, songToJson, songToScript } from '../model/songfile';
 
 function play(source: string) {
@@ -50,6 +50,20 @@ describe('per-pattern beat: a pattern in three beside a song in four', () => {
     expect(script).toContain('beat 3 pattern 2');
     const back = play(script);
     expect(patternBeat(back, 1)).toBe(3);
+  });
+
+  it('travels with `copy`, so a copied pattern keeps its bar lines', () => {
+    // The bug this found: `copyPattern` took the name and the steps, and a
+    // pattern's steps already carry their length — but the beat is a SEPARATE key,
+    // so the copy counted in four around music written in three.
+    const song = play('pattern 2 "B"\nbeat 3 pattern 2\ncopy 2 3');
+    expect(patternBeat(song, 2)).toBe(3);
+    expect(patternLength(song, 2)).toBe(patternLength(song, 1));
+  });
+
+  it('leaves no beat key behind when the copied pattern has none', () => {
+    const song = play('pattern 2 "B"\nbeat 3 pattern 2\npattern 3 "C"\ncopy 1 3');
+    expect(song.patterns[2]?.beat).toBeUndefined();
   });
 
   it('refuses a pattern number this build does not have, and a count out of range', () => {

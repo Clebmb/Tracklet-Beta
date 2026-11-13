@@ -3109,6 +3109,13 @@ export function copyPattern(song: Song, fromOneBased: number, toOneBased: number
   const to = ensurePattern(song, toOneBased);
   to.name = from.name;
   to.steps = from.steps.map((row) => row.map((cell) => copyCell(cell)));
+  // The pattern's own BEAT travels with it: the steps already bring their own
+  // length, and a copy that kept the notes on a three-beat grid but counted them
+  // in four would be the wrong bar lines around the right music. Deleted rather
+  // than set when the source has none, so a copy of an ordinary pattern stays an
+  // ordinary pattern.
+  if (from.beat === undefined) delete to.beat;
+  else to.beat = from.beat;
   reshape(song);
 }
 
