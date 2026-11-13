@@ -136,9 +136,11 @@ import {
   setCellStop,
   setOrder,
   setMachineOrder,
+  patternBeat,
+  patternLength,
+  setPatternBeat,
   setPatternLength,
   setPatternRows,
-  patternLength,
   stopFromName,
   supportsNoteClock,
   tidyBusName,
@@ -428,6 +430,23 @@ function applySongSet(song: Song, edit: ApiInput, where: string, record: RecordC
       record('song.set', 'rows', patternRows(song), after);
       setPatternRows(song, after);
     }
+  }
+
+  // `beat` with a `pattern` narrows to one pattern's own count, the same scope
+  // `beat N pattern P` has in the language; `rowsPerBeat` below stays the song's.
+  const patternBeatValue = maybeNumber(edit, 'beat');
+  if (patternBeatValue !== null) {
+    const which = maybeNumber(edit, 'pattern');
+    if (which === null) {
+      refuse('invalid_input', `${where}: "beat" needs a "pattern" — the song's own count is "rowsPerBeat".`);
+    }
+    const index = Math.round(which) - 1;
+    if (!song.patterns[index]) {
+      refuse('not_found', `${where}: this song has ${song.patterns.length} patterns, so "pattern" must be 1..${song.patterns.length}.`);
+    }
+    const after = clampRowsPerBeat(patternBeatValue);
+    record('song.set', `pattern ${index + 1} beat`, patternBeat(song, index), after);
+    setPatternBeat(song, index, after);
   }
 
   const beat = maybeNumber(edit, 'rowsPerBeat');

@@ -198,6 +198,7 @@ import {
   type MidiStatus,
   userKitFromName,
   parseUserKits,
+  patternBeat,
   shareLink,
   songUsesFont,
   shareSongFromUrl,
@@ -4416,7 +4417,9 @@ export class TrackerScene extends Phaser.Scene {
     this.clearSelectionBlock();
     this.syncAudioGraph();
     this.cursor = clampCursor(this.cursor, this.currentPattern, this.trackCount);
-    this.grid.setRowsPerBeat(this.song.rowsPerBeat);
+    // The pattern's OWN beat, when it has one: a pattern in three draws its bar
+    // lines every three steps even beside a song in four.
+    this.grid.setRowsPerBeat(patternBeat(this.song, this.patternIndex));
     this.grid.setPattern(this.currentPattern);
     this.grid.setTrackNames(this.song.tracks.map((t) => t.name));
     this.rollView?.setPattern(this.currentPattern);

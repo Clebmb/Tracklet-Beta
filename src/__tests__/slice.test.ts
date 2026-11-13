@@ -111,7 +111,7 @@ describe('sliced pieces in a song file', () => {
     expect(JSON.parse(text).version).toBe(50);
     // The newest version this build writes is 51 (a table of your own); a SLICED
     // song is still written as 50, which is what the line below pins.
-    expect(SONG_FILE_VERSION_MAX).toBe(58);
+    expect(SONG_FILE_VERSION_MAX).toBe(59);
     const back = songFromJson(text);
     expect(back.ok).toBe(true);
     if (!back.ok) return;
@@ -138,6 +138,6 @@ describe('sliced pieces in a song file', () => {
   });
 
   it('claim language 66 and leave the file at 50', () => {
-    expect(SCRIPT_VERSION).toBe(75);
+    expect(SCRIPT_VERSION).toBe(76);
   });
 });

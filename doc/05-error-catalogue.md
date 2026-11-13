@@ -976,6 +976,26 @@ steps 32 in 3            # not the spelling — there is no `in`
 
 The clause is there but the pattern it names is not a number this build has.
 
+### `beat needs one number, e.g. beat 4 — or beat 3 pattern 2 for one pattern's own count.`
+
+A `beat` line with words after the number that are not the per-pattern clause.
+Like `steps`, it takes the song's count or one pattern's.
+
+```
+beat 4                # every pattern
+beat 3 pattern 2      # pattern 2 alone
+```
+
+### `beat ... pattern needs a pattern number 1..128; got "<x>".`
+
+The clause is there but the pattern it names is not a number this build has.
+
+### `pattern <n>: "beat" must be a whole number 1..8 (steps per beat), or absent for the song's; got <x>.`
+
+A `.json` whose pattern carries a `beat` that is not a usable count. Refused rather
+than clamped: a bar line that moves on its own is a song counted in something
+nobody wrote.
+
 ### `tracks must be a whole number 1..16; got "<x>".`
 
 The channel count must be a whole number between 1 and 8.

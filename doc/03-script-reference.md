@@ -2462,6 +2462,13 @@ takes effect on the next note rather than cutting the one that is ringing.
 tracks 6
 ```
 
+**One pattern's own beat** works the same way: `beat 3 pattern 2` counts pattern 2
+in threes while the song counts in fours, which moves where the bar lines and beat
+accents fall in that pattern and what a `bars` range means there. The transport
+itself still runs at the song's beat — a step that changed length mid-song would
+change what `bpm` means — so this is a way of COUNTING, not of conducting. A song
+with one saves as file version 59.
+
 **One pattern's own length** is the same word with a scope: `steps 32 pattern 3`
 gives pattern 3 a thirty-two-step grid and leaves the rest as they are, which is
 how a sixteen-step verse and a thirty-two-step chorus live in one song. The grid,

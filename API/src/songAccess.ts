@@ -24,6 +24,7 @@ import {
   startFraction,
   keyName,
   midiToNoteName,
+  patternBeat,
   patternRows,
   songFromJson,
   songToJson,
@@ -117,6 +118,8 @@ export interface PatternDigest {
   pattern: number;
   name: string;
   steps: number;
+  /** Steps per beat in THIS pattern: its own count, or the song's. */
+  beat: number;
   /** Pitched notes in this pattern. */
   notes: number;
   /** Drum hits in this pattern. */
@@ -187,6 +190,9 @@ function countCells(song: Song): { perTrack: TrackDigest[]; perPattern: PatternD
     pattern: index + 1,
     name: pattern.name,
     steps: pattern.steps.length,
+    // Its own count, when it has one, so a caller can see that a pattern in three
+    // is counted in three rather than inferring it from the song.
+    beat: patternBeat(song, index),
     notes: 0,
     drums: 0,
     empty: true,

@@ -377,6 +377,7 @@ import {
   setCellStop,
   stopFromName,
   setOrder,
+  setPatternBeat,
   setPatternLength,
   setPatternRows,
   setTrackCount,
@@ -893,7 +894,8 @@ type ScriptCommand =
   | { kind: 'tempo'; line: number; bpm: number }
   /** `steps N` for the song, or `steps N pattern P` for one pattern. */
   | { kind: 'steps'; line: number; rows: number; pattern?: number }
-  | { kind: 'beat'; line: number; stepsPerBeat: number }
+  /** `beat N` for the song, or `beat N pattern P` for one pattern's own count. */
+  | { kind: 'beat'; line: number; stepsPerBeat: number; pattern?: number }
   // The two sugar words carry the RESOLVED pair rather than their own arguments:
   // they are a way of saying `steps`/`beat`, so by the time a command exists the
   // note values are gone and this is the same two numbers the plain words produce.
@@ -2528,10 +2530,25 @@ export function parseScript(
         break;
       }
       case 'beat': {
-        if (args.length !== 1) { fail(lineNumber, `beat needs one number, e.g. beat 4.`); break; }
+        // Same shape as `steps`: the number alone is the song's, and a `pattern N`
+        // clause narrows it to one pattern's own bar.
+        const scoped = args.length === 3 && args[1]?.toLowerCase() === 'pattern';
+        if (args.length !== 1 && !scoped) {
+          fail(lineNumber, `beat needs one number, e.g. beat 4 — or beat 3 pattern 2 for one pattern's own count.`);
+          break;
+        }
         const stepsPerBeat = Number(args[0]);
         if (!Number.isInteger(stepsPerBeat) || stepsPerBeat < MIN_ROWS_PER_BEAT || stepsPerBeat > MAX_ROWS_PER_BEAT) {
           fail(lineNumber, `beat must be a whole number ${MIN_ROWS_PER_BEAT}..${MAX_ROWS_PER_BEAT} (steps per beat); got "${args[0]}".`);
+          break;
+        }
+        if (scoped) {
+          const which = Number(args[2]);
+          if (!Number.isInteger(which) || which < 1 || which > MAX_PATTERNS) {
+            fail(lineNumber, `beat ... pattern needs a pattern number 1..${MAX_PATTERNS}; got "${args[2]}".`);
+            break;
+          }
+          commands.push({ kind: 'beat', line: lineNumber, stepsPerBeat, pattern: which });
           break;
         }
         state.rowsPerBeat = stepsPerBeat;
@@ -5608,7 +5625,8 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
       else setPatternRows(song, command.rows);
       return;
     case 'beat':
-      song.rowsPerBeat = clampRowsPerBeat(command.stepsPerBeat);
+      if (command.pattern !== undefined) setPatternBeat(song, command.pattern - 1, command.stepsPerBeat);
+      else song.rowsPerBeat = clampRowsPerBeat(command.stepsPerBeat);
       return;
     // Sugar lands as the pair it stands for, in the same order `steps` then `beat`
     // would have set them, so nothing downstream can tell which word was written.

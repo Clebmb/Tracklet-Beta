@@ -254,6 +254,9 @@ import {
   setCellNotes,
   setCellStop,
   stopFromName,
+  MAX_ROWS_PER_BEAT,
+  MIN_ROWS_PER_BEAT,
+  setPatternBeat,
   setPatternLength,
   setPatternRows,
   setTrackCount,
@@ -829,7 +832,16 @@ export const SIXTEEN_TRACKS_SONG_FILE_VERSION = 57;
  * always per pattern; the flattening was the reader's.
  */
 export const PATTERN_LENGTH_SONG_FILE_VERSION = 58;
-export const SONG_FILE_VERSION_MAX = PATTERN_LENGTH_SONG_FILE_VERSION;
+
+/**
+ * Version 59: a pattern counts its beats differently from the song.
+ *
+ * Its own rung for the reason length needed one: an older build reads the pattern,
+ * ignores the field, and writes the song back with every bar line where the song
+ * put it — a pattern counted in three that silently becomes four.
+ */
+export const PATTERN_BEAT_SONG_FILE_VERSION = 59;
+export const SONG_FILE_VERSION_MAX = PATTERN_BEAT_SONG_FILE_VERSION;
 /** The extension a saved script gets. */
 export const SCRIPT_FILE_EXTENSION = '.txt';
 /** The extension a saved song gets. */
@@ -1097,6 +1109,9 @@ export function songToScript(song: Song, settings: ScriptSettings = { volume: nu
     // `steps` cannot describe it, and a reader that assumed the song's length
     // would cut the pattern's tail off.
     if (pattern.steps.length !== rows) lines.push(`steps ${pattern.steps.length} pattern ${i + 1}`);
+    // A pattern on its own beat says so beside its own length, for the same reason:
+    // the song's `beat` cannot describe it.
+    if (pattern.beat !== undefined) lines.push(`beat ${pattern.beat} pattern ${i + 1}`);
     const body = gridLines(pattern.steps.map((row) => row.map(cellText)), song.tracks.length);
     for (const line of body) lines.push(line);
   });
@@ -1506,6 +1521,10 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
   const manyTracks = song.tracks.length > TRACKS_PER_BANK;
   // And a song whose patterns are not all the same length writes version 58.
   const uneven = song.patterns.some((pattern) => pattern.steps.length !== patternRows(song));
+  // And a song whose patterns count their beats differently writes version 59.
+  const crossBeat = song.patterns.some(
+    (pattern) => pattern.beat !== undefined && pattern.beat !== song.rowsPerBeat,
+  );
   // And a song whose channels VARY their hits writes version 34: an older build
   // would play every hit identically, which is precisely the difference these two
   // settings exist to make — the reason `shape` got version 21 and the effects got
@@ -1579,6 +1598,8 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
     format: SONG_FILE_FORMAT,
     version: noteClocked
       ? NOTE_CLOCK_SONG_FILE_VERSION
+      : crossBeat
+      ? PATTERN_BEAT_SONG_FILE_VERSION
       : uneven
       ? PATTERN_LENGTH_SONG_FILE_VERSION
       : manyTracks
@@ -1879,6 +1900,9 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
     // The array is what says "several notes", so a cell that holds one note is
     // still the bare number it has always been, and a song of single notes is
     // byte-for-byte the file this app wrote before a cell could hold a chord.
+    // Its own beat, and no key at all when it agrees with the song: a song whose
+    // patterns never disagreed writes the file it always wrote.
+    ...(pattern.beat === undefined ? {} : { beat: pattern.beat }),
     steps: pattern.steps.map((row) => row.map((cell) => {
       // A STOP is a bare WORD — `"off"` — exactly the shape a drum's word takes,
       // and for the same reason: a string where a number belongs says "this step
@@ -2373,6 +2397,10 @@ export function songFromJson(text: string): SongFileParse {
   patterns.forEach((source, i) => {
     const pattern = ensurePattern(song, i + 1);
     pattern.name = source.name;
+    // Its beat, through the setter that DELETES the key when it agrees with the
+    // song — so a file that said `beat: 4` on a 4-beat song reads back as the song
+    // it was rather than gaining a field it never needed.
+    setPatternBeat(song, i, source.beat);
     // Each pattern keeps the length the FILE gave it, which is the one thing the
     // song-level `steps` cannot say: a verse of sixteen and a chorus of
     // thirty-two is a song, and flattening both to `steps` would drop the chorus's
@@ -2805,6 +2833,8 @@ interface JsonPattern {
   name: string;
   /** The pattern's grid, already range-checked: a note and its force, or null. */
   cells: (JsonCell | null)[][];
+  /** Its own steps-per-beat, when it disagrees with the song's. */
+  beat?: number;
 }
 
 function readTracks(value: unknown, errors: string[], buses: readonly Bus[]): JsonTrack[] | null {
@@ -3774,6 +3804,17 @@ function readPatterns(value: unknown, errors: string[]): JsonPattern[] | null {
       errors.push(`${where} needs a "steps" grid.`);
       return null;
     }
+    // Its own beat, when it has one: refused by name rather than clamped, because
+    // a bar line that silently moves is a song counted in something nobody wrote.
+    let beat: number | undefined;
+    if (entry.beat !== undefined && entry.beat !== null) {
+      const amount = numberOf(entry.beat);
+      if (amount === null || !Number.isInteger(amount) || amount < MIN_ROWS_PER_BEAT || amount > MAX_ROWS_PER_BEAT) {
+        errors.push(`${where}: "beat" must be a whole number ${MIN_ROWS_PER_BEAT}..${MAX_ROWS_PER_BEAT} (steps per beat), or absent for the song's; got ${JSON.stringify(entry.beat)}.`);
+        return null;
+      }
+      beat = amount;
+    }
     const cells: (JsonCell | null)[][] = [];
     const rows = entry.steps;
     for (let r = 0; r < rows.length; r++) {
@@ -3945,7 +3986,7 @@ function readPatterns(value: unknown, errors: string[]): JsonPattern[] | null {
       }
       cells.push(line);
     }
-    out.push({ name: entry.name, cells });
+    out.push({ name: entry.name, cells, ...(beat === undefined ? {} : { beat }) });
   }
   return out;
 }

@@ -1582,6 +1582,16 @@ export function nextHold(steps: number): number {
 export interface Pattern {
   name: string;
   steps: Cell[][];
+  /**
+   * How many STEPS make a beat in THIS pattern, when it disagrees with the song.
+   *
+   * Absent means "the song's `beat`", which is what every pattern written before
+   * this field means — so a song whose patterns agree writes no key and reads
+   * back byte-identical. A pattern in three against a song in four is the reason
+   * this exists: the bar lines a person reads have to be the bar they are
+   * thinking in, not the one the song defaults to.
+   */
+  beat?: number;
 }
 
 /** The whole song. Patterns and tracks are the two dimensions of the grid. */
@@ -3008,6 +3018,35 @@ export function songUsesFont(song: Song): boolean {
 /** How long ONE pattern is, in steps. */
 export function patternLength(song: Song, index: number): number {
   return song.patterns[index]?.steps.length ?? patternRows(song);
+}
+
+/**
+ * How many steps make a beat in ONE pattern: its own if it says, the song's if not.
+ *
+ * Display and counting rather than tempo: `rowsPerBeat` is what a bar line and a
+ * `bars` range are measured in, and the transport's step length is the SONG's — a
+ * pattern in three draws its bar lines every three steps against a beat that still
+ * lasts a four-step beat's worth of time. That split is deliberate for now and
+ * stated in the reference, because making the transport follow each pattern would
+ * change what `bpm` means mid-song.
+ */
+export function patternBeat(song: Song, index: number): number {
+  return clampRowsPerBeat(song.patterns[index]?.beat ?? song.rowsPerBeat);
+}
+
+/** Give one pattern its own beat, or `undefined` to put it back on the song's. */
+export function setPatternBeat(song: Song, index: number, beat: number | undefined): void {
+  const pattern = song.patterns[index];
+  if (!pattern) return;
+  if (beat === undefined) {
+    delete pattern.beat;
+    return;
+  }
+  const target = clampRowsPerBeat(beat);
+  // The song's own beat is said by saying NOTHING: a pattern that matches it must
+  // not carry a key, or a song that never disagreed would save differently.
+  if (target === song.rowsPerBeat) delete pattern.beat;
+  else pattern.beat = target;
 }
 
 /**

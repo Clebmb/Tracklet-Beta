@@ -102,7 +102,7 @@ describe('a table in a song file', () => {
     const song = applied('table 1 ODD 1 0 0.5');
     const text = songToJson(song);
     expect(JSON.parse(text).version).toBe(51);
-    expect(SONG_FILE_VERSION_MAX).toBe(58);
+    expect(SONG_FILE_VERSION_MAX).toBe(59);
     const back = songFromJson(text);
     expect(back.ok).toBe(true);
     if (!back.ok) return;
@@ -128,6 +128,6 @@ describe('a table in a song file', () => {
   });
 
   it('claims language version 66', () => {
-    expect(SCRIPT_VERSION).toBe(75);
+    expect(SCRIPT_VERSION).toBe(76);
   });
 });

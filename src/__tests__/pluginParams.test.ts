@@ -128,7 +128,7 @@ describe('the params word', () => {
 
 describe('params in a file', () => {
   it('writes version 46 with a pluginParams key, and reads it back', () => {
-    expect(SONG_FILE_VERSION_MAX).toBe(58);
+    expect(SONG_FILE_VERSION_MAX).toBe(59);
     const plain = JSON.parse(songToJson(createSong())) as { version: number; tracks: Record<string, unknown>[] };
     expect(plain.version).toBeLessThan(46);
     for (const track of plain.tracks) expect('pluginParams' in track).toBe(false);
