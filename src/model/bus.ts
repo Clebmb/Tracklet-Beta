@@ -53,14 +53,21 @@ import { DEFAULT_LEVEL, clampLevel } from './song';
  * spreadsheet, which is the thing buses exist to prevent.
  */
 /**
- * How many groups the mixer draws: four.
+ * How many groups a song may have: eight.
  *
  * It used to be `MAX_TRACKS / 2`, which was four while a song had eight
- * channels — a coincidence that would have doubled the mixer's rows the moment
- * the song grew to sixteen, for a layout reason rather than a musical one. A
- * group is a group; the MIXER page has room for four of them.
+ * channels — a coincidence rather than a rule, so the sixteen-channel work pinned
+ * it rather than letting it double by accident. It is eight now on its own terms:
+ * the MIXER page draws them in TWO COLUMNS of four, which is what makes eight fit
+ * in a panel that was measured for four rows.
  */
-export const MAX_BUSES = 4;
+export const MAX_BUSES = 8;
+
+/** The ceiling every earlier build wrote and read: a file rung turns on this. */
+export const FOUR_BUSES = 4;
+
+/** How many group rows the mixer panel has room for, before it wraps. */
+export const BUSES_PER_COLUMN = 4;
 
 /** How long a bus name may be, in characters: the same budget a section gets. */
 export const MAX_BUS_NAME = 12;

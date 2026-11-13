@@ -660,8 +660,10 @@ them.
   later in the same script just moves the whole kit.
 - **A bus has one knob**, a level: no mute, no solo, no effects. Muting is still a
   channel's own business, and soloing is still about listening. A song may have at
-  most four groups — what the MIXER page draws, so the ceiling is the page rather
-  than the music.
+  most eight groups. That ceiling is the MIXER page rather than the music: its
+  GROUPS panel is measured for four rows, so the fifth group starts a second
+  column there — two columns of four. A song with more than four groups saves as
+  file version 60, because an older build trims the list to four on the way in.
 - **By hand:** through the `SCRIPT` button and a line of text — `bus DRUMS 70`,
   then `bus DRUMS` on each drum's `track` line — or from a saved `.txt`, exactly
   like every other setting in the language. The mixer screen has no group page

@@ -11,7 +11,7 @@ import {
   type UiColors,
 } from 'phaser-ui-canvas';
 
-import { busLevelFor, MAX_BUSES, type Bus } from '../model/bus';
+import { BUSES_PER_COLUMN, busLevelFor, MAX_BUSES, type Bus } from '../model/bus';
 import type { DrumMachine } from '../model/machine';
 import { audible, channelGain, soloing } from '../model/mix';
 import {
@@ -1192,8 +1192,8 @@ export class MixerView {
     });
 
     // BUS: the group this channel joins. A field that cycles rather than a menu,
-    // because the choices are the song's own groups and there are at most five
-    // of them — the same press-to-cycle bargain the groove and scale buttons make.
+    // because the choices are the song's own groups and there are at most eight of
+    // them — the same press-to-cycle bargain the groove and scale buttons make.
     this.pushText(x + 2, layout.busLabelY, 'BUS', c.textDim);
     this.busField(x + 2, layout.busY, layout.width, track.bus, this.handlers.buses(), c, () => {
       this.pick(index);
@@ -1436,14 +1436,25 @@ export class MixerView {
       this.pushText(GROUPS.x + 8, GROUPS.y + 56, 'SEVERAL CHANNELS: PRESS + GROUP.', c.textDim);
       return;
     }
+    // One column while four or fewer fit in the panel's height; TWO when the song
+    // has more, four rows each. The panel was measured for four rows and the page
+    // around it is full, so the fifth group goes BESIDE the first rather than below
+    // the fourth — the row of four is what the height allows.
+    const shown = Math.min(buses.length, MAX_BUSES);
+    const columns = Math.max(1, Math.ceil(shown / BUSES_PER_COLUMN));
+    const colW = (GROUPS.width - 8) / columns;
     buses.slice(0, MAX_BUSES).forEach((bus, index) => {
-      const y = GROUPS.y + 24 + index * 17;
-      const barX = GROUPS.x + 76;
-      const barW = GROUPS.width - 76 - 44;
-      this.pushText(GROUPS.x + 8, y + 1, clip(bus.name, 12), c.textPrimary);
+      const column = Math.floor(index / BUSES_PER_COLUMN);
+      const row = index % BUSES_PER_COLUMN;
+      const left = GROUPS.x + 4 + column * colW;
+      const y = GROUPS.y + 24 + row * 17;
+      const nameW = columns === 1 ? 64 : 40;
+      const barX = left + nameW;
+      const barW = colW - nameW - (columns === 1 ? 44 : 30);
+      this.pushText(left + 4, y + 1, clip(bus.name, columns === 1 ? 12 : 8), c.textPrimary);
       drawInset(this.bars, { x: barX, y: y, width: barW, height: 9 }, 1, c);
       this.meterFill(barX, y, barW, bus.level, 0, 100, false, c.textGreen, c);
-      this.pushText(GROUPS.x + GROUPS.width - 8, y, levelLabel(bus.level), c.textPrimary, 1);
+      this.pushText(left + colW - 8, y, levelLabel(bus.level), c.textPrimary, 1);
       this.zone({ x: barX, y: y - 3, width: barW, height: 14 }, undefined, (p) => {
         this.handlers.beginEdit();
         const inner = barW - 2;

@@ -3003,6 +3003,19 @@ export function patternRows(song: Song): number {
  * than merely different. Whatever the pack does about that, it has to be able to
  * notice first.
  */
+/**
+ * What to say when a song plays a recorded instrument and the pack carried none.
+ *
+ * The one failure a font pack has that looks like success: the song opens, the
+ * cells are there, and every note plays the built-in fallback instead. Said out
+ * loud on open, where somebody can act on it, rather than only at pack time on a
+ * machine that HAD the font.
+ */
+export function missingFontNotice(song: Song, carriedFonts: number): string | null {
+  if (!songUsesFont(song) || carriedFonts > 0) return null;
+  return 'THIS SONG PLAYS A RECORDED INSTRUMENT AND THE PACK DOES NOT CARRY IT — it falls back to the built-in one-shot unless this machine already has the font.';
+}
+
 export function songUsesFont(song: Song): boolean {
   const isFont = (params: { wave?: string } | undefined): boolean => params?.wave === 'font';
   // A layer carries its WAVE directly (it is one player of the stacked sound),

@@ -126,6 +126,7 @@ import {
   busNameProblem,
   busNames,
   busScript,
+  FOUR_BUSES,
   MAX_BUSES,
   tidyBus,
   tidyBusName,
@@ -841,7 +842,17 @@ export const PATTERN_LENGTH_SONG_FILE_VERSION = 58;
  * put it — a pattern counted in three that silently becomes four.
  */
 export const PATTERN_BEAT_SONG_FILE_VERSION = 59;
-export const SONG_FILE_VERSION_MAX = PATTERN_BEAT_SONG_FILE_VERSION;
+
+/**
+ * Version 60: a song with more than four groups.
+ *
+ * The cap went from four to eight, and `tidyBuses` — the function every reader
+ * funnels through — cuts the list to the cap. A build that says 59 reading an
+ * eight-group song would keep the first four and save it back that way, which is
+ * the failure this ladder exists to prevent: silent loss, not a refusal.
+ */
+export const MORE_BUSES_SONG_FILE_VERSION = 60;
+export const SONG_FILE_VERSION_MAX = MORE_BUSES_SONG_FILE_VERSION;
 /** The extension a saved script gets. */
 export const SCRIPT_FILE_EXTENSION = '.txt';
 /** The extension a saved song gets. */
@@ -1522,6 +1533,10 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
   // And a song whose patterns are not all the same length writes version 58.
   const uneven = song.patterns.some((pattern) => pattern.steps.length !== patternRows(song));
   // And a song whose patterns count their beats differently writes version 59.
+  // Highest rung first: a song can be both wide and uneven, and the file has to
+  // claim the version an older build would refuse rather than the one it would
+  // half-read.
+  const extraBuses = song.buses.length > FOUR_BUSES;
   const crossBeat = song.patterns.some(
     (pattern) => pattern.beat !== undefined && pattern.beat !== song.rowsPerBeat,
   );
@@ -1598,6 +1613,8 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
     format: SONG_FILE_FORMAT,
     version: noteClocked
       ? NOTE_CLOCK_SONG_FILE_VERSION
+      : extraBuses
+      ? MORE_BUSES_SONG_FILE_VERSION
       : crossBeat
       ? PATTERN_BEAT_SONG_FILE_VERSION
       : uneven

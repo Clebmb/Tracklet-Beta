@@ -1655,12 +1655,14 @@ one mistake here that looks like a correct line.
 
 ### `a song may have at most <N> buses, and this one already has <N>. Use one of the names it has, or replace one.`
 
-The fifth distinct group. A group of one channel is just that channel's fader, and
-the MIXER page draws four groups without scrolling — so four is the ceiling, and
-it is a layout decision rather than a musical one. Redefining a name that already exists
-REPLACES it rather than being refused, so the fix is usually to reuse a name.
+The ninth distinct group. A group of one channel is just that channel's fader, and
+the MIXER page's GROUPS panel is measured for four ROWS — it wraps at the fifth
+into a second column, and two columns is all the width has — so eight is the
+ceiling, and it is a layout decision rather than a musical one. Redefining a name
+that already exists REPLACES it rather than being refused, so the fix is usually
+to reuse a name.
 
-**Fix:** `bus DRUMS 60` again to move the group, or squeeze more into the four.
+**Fix:** `bus DRUMS 60` again to move the group, or squeeze more into the eight.
 
 ### `track <N> joins a bus the song does not have: "<x>" — <what the song has>. A bus is declared ABOVE the channel that joins it, e.g. "bus DRUMS 70" then "track <N> bus DRUMS". Write "bus <none>" to take a channel back off a group.`
 

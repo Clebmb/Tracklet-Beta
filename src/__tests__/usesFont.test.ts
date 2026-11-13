@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { applyScript } from '../model/script';
-import { createSong, songUsesFont } from '../model/song';
+import { createSong, missingFontNotice, songUsesFont } from '../model/song';
 
 function play(source: string) {
   const result = applyScript(createSong(), source);
@@ -25,6 +25,18 @@ describe('usesFont: the one dependency a pack cannot carry', () => {
 
   it('reaches a stacked layer, not only the channel’s own sound', () => {
     expect(songUsesFont(play('track 1 wave sine\nlayer 1 2 wave font'))).toBe(true);
+  });
+
+  it('says so on OPEN when the pack carried no font, and stays quiet otherwise', () => {
+    // The failure that looks like success: the song opens, the cells are there, and
+    // every note plays the built-in fallback. Said where somebody can act on it.
+    const fontSong = play('track 1 "PIANO" wave font');
+    const notice = missingFontNotice(fontSong, 0);
+    expect(notice).toContain('DOES NOT CARRY IT');
+    expect(notice).toContain('falls back');
+    // A pack that DID carry it, and a song that needs none, both say nothing.
+    expect(missingFontNotice(fontSong, 1)).toBeNull();
+    expect(missingFontNotice(play('tracks 2\nnote 0 1 C-4'), 0)).toBeNull();
   });
 
   it('is what `song.describe` reports, so a caller can warn before handing a song over', () => {

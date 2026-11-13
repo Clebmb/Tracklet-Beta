@@ -2276,10 +2276,20 @@ can build a beautiful tune with a chopped break and hand over a `.txt` that play
 is the one line that makes the handover work.
 
 What is in it: the song's JSON exactly as a save writes it, every sample the song
-name-checks as a `.wav`, and every third-party plugin's manifest plus source. What
+name-checks as a `.wav`, the **kit** the song names when it is one of yours, and
+the **recorded instrument** a `wave font` channel plays — the soundfont (`.sf2`) or
+Noislet pack (`.instrument.json`) file itself, under `fonts/` in the zip. That last
+one is why a song made on a machine with a big orchestra library opens on a
+bare one: the font travels in the pack and is installed into the library as the
+song opens, so the notes play the instrument they were written for instead of a
+built-in one-shot. A song of built-in waves carries no font at all — the common
+case, and a pack that shipped somebody's soundfont uninvited would be weight at
+best and a licence problem at worst. What
 is not: the built-in voices, which every build carries, and any sample or plugin
 that is not on this machine — those travel by name, and the file menu's report says
-which.
+which. If a pack wants a font it does not carry — an older pack, or one written
+where the file had been deleted — opening it says so in words, because that is a
+failure that sounds almost right.
 
 There is no `pack load`. A script names a file something would have to FIND, and a
 path in a browser is not a path: opening a pack is a click, and OPEN FILE already

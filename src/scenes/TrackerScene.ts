@@ -198,6 +198,7 @@ import {
   type MidiStatus,
   userKitFromName,
   parseUserKits,
+  missingFontNotice,
   patternBeat,
   shareLink,
   songUsesFont,
@@ -2554,7 +2555,14 @@ export class TrackerScene extends Phaser.Scene {
       this.engine.setKit(this.song.kit, this.savedKits);
     }
     const opened = this.openFileAction(`${name} / song.json`, parsed.bundle.songJson);
-    return { ...opened, details: [...report, ...(opened.details ?? [])] };
+    // Said about the song that just opened, not the one that was playing: a pack
+    // that wants a font it did not carry sounds almost right, which is the worst
+    // way to be wrong about an instrument.
+    const missing = missingFontNotice(this.song, parsed.bundle.fonts.length);
+    return {
+      ...opened,
+      details: [...report, ...(missing === null ? [] : [missing]), ...(opened.details ?? [])],
+    };
   }
 
   /** Put the plugin overlay away, unmounting what it mounted. */

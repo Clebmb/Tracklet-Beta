@@ -15,6 +15,7 @@ import {
   clampBusLevel,
   createSong,
   DEFAULT_LEVEL,
+  BUSES_PER_COLUMN,
   MAX_BUSES,
   MAX_BUS_NAME,
   NO_BUS_WORD,
@@ -70,11 +71,13 @@ function refusal(source: string, from: Song = createSong()): string {
 // --- the table ---------------------------------------------------------------
 
 describe('the bus table', () => {
-  it('caps a song at four groups, which is half its channels', () => {
-    // Derived rather than chosen: a song has at most 8 channels and a group of ONE
-    // is just that channel's fader, so four is the most a song can use without one
-    // of them being pointless.
-    expect(MAX_BUSES).toBe(4);
+  it('caps a song at eight groups: two mixer columns of four', () => {
+    // Pinned, not derived. It used to be `MAX_TRACKS / 2`, which read as a rule and
+    // was a coincidence of an eight-channel song; eight is now a decision about the
+    // MIXER page, whose GROUPS panel has room for four rows and therefore wraps to
+    // a second column at the fifth.
+    expect(MAX_BUSES).toBe(8);
+    expect(MAX_BUSES).toBe(BUSES_PER_COLUMN * 2);
     expect(MAX_BUS_NAME).toBe(12);
     expect(NO_BUS_WORD).toBe('none');
   });
@@ -126,7 +129,9 @@ describe('the bus table', () => {
     expect(tidyBuses([{ name: 'drums', level: 70 }, { name: 'DRUMS', level: 40 }]))
       .toEqual([{ name: 'DRUMS', level: 40 }]);
     const many = ['A', 'B', 'C', 'D', 'E'].map((name) => ({ name, level: 50 }));
-    expect(tidyBuses(many).map((bus) => bus.name)).toEqual(['A', 'B', 'C', 'D']);
+    expect(tidyBuses(many).map((bus) => bus.name)).toEqual(['A', 'B', 'C', 'D', 'E']);
+    const tooMany = Array.from({ length: MAX_BUSES + 2 }, (_, index) => ({ name: `G${index}`, level: 50 }));
+    expect(tidyBuses(tooMany)).toHaveLength(MAX_BUSES);
   });
 
   it('adds and replaces by name, keeping the order it was built in', () => {
@@ -281,11 +286,14 @@ describe('the bus statement', () => {
     expect(applied('bus DRUMS 0').buses[0].level).toBe(0);
   });
 
-  it('refuses a fifth group, naming the way out', () => {
-    const message = refusal('bus A 50\nbus B 50\nbus C 50\nbus D 50\nbus E 50');
-    expect(message).toContain('at most 4 buses, and this one already has 4');
+  it('refuses a ninth group, naming the way out', () => {
+    const eight = Array.from({ length: MAX_BUSES }, (_, index) => `bus G${index} 50`).join('\n');
+    const message = refusal(`${eight}\nbus NINE 50`);
+    expect(message).toContain(`at most ${MAX_BUSES} buses, and this one already has ${MAX_BUSES}`);
     expect(message).toContain('Use one of the names it has');
-    // Redefining one of the four is the fix, and it is not a refusal.
+    // Five groups, though, is a perfectly good song now.
+    expect(applied(`${eight}\n`).buses).toHaveLength(MAX_BUSES);
+    // Redefining one of them is the fix, and it is not a refusal.
     const song = applied('bus A 50\nbus B 50\nbus C 50\nbus D 50\nbus D 40');
     expect(song.buses.map((bus) => bus.level)).toEqual([50, 50, 50, 40]);
   });
@@ -453,7 +461,7 @@ describe('groups in a song file', () => {
       [[{ name: 'A B', level: 70 }], 'needs a "name"'],
       [[{ name: 'NONE', level: 70 }], 'needs a "name"'],
       [[{ name: 'DRUMS', level: 'loud' }], 'needs a "level" 0..100'],
-      [[{ name: 'A', level: 50 }, { name: 'B', level: 50 }, { name: 'C', level: 50 }, { name: 'D', level: 50 }, { name: 'E', level: 50 }], 'at most 4 buses'],
+      [Array.from({ length: MAX_BUSES + 1 }, (_, index) => ({ name: `G${index}`, level: 50 })), `at most ${MAX_BUSES} buses`],
       [[70], 'must be an object like'],
     ];
     for (const [buses, expected] of cases) {
@@ -479,5 +487,41 @@ describe('groups in a song file', () => {
     expect(parseScript('track 2 bus DRUMS', context).errors).toEqual([]);
     expect(parseScript('track 2 bus BASS', context).errors[0].message)
       .toContain('joins a bus the song does not have: "BASS"');
+  });
+});
+
+// --- eight groups ------------------------------------------------------------
+
+describe('eight groups', () => {
+  it('keeps five of them through a file, at its own version', () => {
+    // The rung matters: `tidyBuses` cuts the list to the cap, so a build that
+    // wrote version 59 here would have read the song back with four groups and
+    // saved it that way — half the mixer gone, no error, no mention.
+    const five = ['A', 'B', 'C', 'D', 'E'].map((name) => `bus ${name} 50`).join('\n');
+    const song = applied(five);
+    expect(song.buses).toHaveLength(5);
+    const json = songToJson(song);
+    expect(JSON.parse(json).version).toBe(60);
+    const read = songFromJson(json);
+    if (!read.ok) throw new Error(read.errors.join('\n'));
+    expect(read.song.buses.map((bus) => bus.name)).toEqual(['A', 'B', 'C', 'D', 'E']);
+  });
+
+  it('writes the old version while a song still fits in four', () => {
+    // No rung moves for a song that never used the new room, so every earlier
+    // song in the world keeps the version it had: four groups and three groups
+    // must claim exactly the same one.
+    const four = applied(['A', 'B', 'C', 'D'].map((name) => `bus ${name} 50`).join('\n'));
+    const three = applied(['A', 'B', 'C'].map((name) => `bus ${name} 50`).join('\n'));
+    const version = JSON.parse(songToJson(four)).version;
+    expect(version).toBe(JSON.parse(songToJson(three)).version);
+    expect(version).toBeLessThan(60);
+  });
+
+  it('fits eight in the mixer as two columns of four, and no more', () => {
+    // The layout is the ceiling: the GROUPS panel holds four rows, so the fifth
+    // group wraps BESIDE the first rather than below the fourth.
+    expect(BUSES_PER_COLUMN).toBe(4);
+    expect(MAX_BUSES / BUSES_PER_COLUMN).toBe(2);
   });
 });
