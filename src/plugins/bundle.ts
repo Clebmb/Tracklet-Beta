@@ -40,6 +40,14 @@ export const BUNDLE_SAMPLE_DIR = 'samples';
  * song NAMES is packed: a library of twenty is not the song.
  */
 export const BUNDLE_KIT_DIR = 'kits';
+/**
+ * Where a RECORDED INSTRUMENT travels: `fonts/<NAME>.sf2` or `<NAME>.instrument.json`.
+ *
+ * Packed only when the song plays `wave font`, because that is the only case where
+ * the other end is guaranteed to need it — and the bytes are carried rather than
+ * the parsed font, since this build can read a soundfont but cannot write one.
+ */
+export const BUNDLE_FONT_DIR = 'fonts';
 /** A bundle download: `<stem>.tracklet-bundle.zip`, beside `<stem>.json`. */
 export function songBundleFileName(stem: string): string {
   return `${stem}.tracklet-bundle.zip`;
@@ -67,12 +75,20 @@ export interface SongBundleKit {
   json: unknown;
 }
 
+/** One bundled instrument: the file it was read from, going along with the song. */
+export interface SongBundleFont {
+  name: string;
+  kind: 'soundfont' | 'noislet';
+  bytes: Uint8Array;
+}
+
 /** A bundle opened: the song plus everything it names. */
 export interface SongBundle {
   songJson: string;
   plugins: SongBundlePlugin[];
   samples: SongBundleSample[];
   kits: SongBundleKit[];
+  fonts: SongBundleFont[];
 }
 
 /** The file a wav travels under: the sample name with path characters folded. */
@@ -99,6 +115,8 @@ export function buildSongBundle(parts: {
   samples: readonly { name: string; wavBytes: Uint8Array }[];
   /** The kits of your own the song names — usually none, or one. */
   kits?: readonly { name: string; json: unknown }[];
+  /** The recorded instruments the song plays, for a song on `wave font`. */
+  fonts?: readonly SongBundleFont[];
 }): Uint8Array {
   const files: { name: string; bytes: Uint8Array }[] = [
     { name: BUNDLE_SONG_NAME, bytes: new TextEncoder().encode(parts.songJson) },
@@ -115,6 +133,16 @@ export function buildSongBundle(parts: {
   }
   for (const sample of parts.samples) {
     files.push({ name: `${BUNDLE_SAMPLE_DIR}/${bundleSampleName(sample.name)}`, bytes: sample.wavBytes });
+  }
+  for (const font of parts.fonts ?? []) {
+    files.push({
+      // `bundleSampleName` folds a name to a file name and ends it in `.wav`, so
+      // the recording suffix comes back off before an instrument's own extension
+      // goes on — otherwise this machine reads `FIRE BED.wav.sf2` back as a font
+      // called `FIRE BED.wav`.
+      name: `${BUNDLE_FONT_DIR}/${bundleSampleName(font.name).replace(/\.wav$/i, '')}${font.kind === 'noislet' ? '.instrument.json' : '.sf2'}`,
+      bytes: font.bytes,
+    });
   }
   for (const kit of parts.kits ?? []) {
     files.push({
@@ -178,7 +206,20 @@ export function parseSongBundle(bytes: Uint8Array): { ok: true; bundle: SongBund
       return { ok: false, error: `that bundle\u2019s kit \"${name}\" is not JSON: every kit in a bundle has to parse.` };
     }
   }
-  return { ok: true, bundle: { songJson, plugins, samples, kits } };
+  // The recorded instruments. Decided by the file the writer chose, and named the
+  // way the instrument is named, so the report on the way out can say which one
+  // arrived.
+  const fonts: SongBundleFont[] = [];
+  for (const file of read.files) {
+    if (!file.name.startsWith(`${BUNDLE_FONT_DIR}/`)) continue;
+    const base = file.name.slice(BUNDLE_FONT_DIR.length + 1);
+    if (base.toLowerCase().endsWith('.instrument.json')) {
+      fonts.push({ name: base.slice(0, -'.instrument.json'.length), kind: 'noislet', bytes: file.bytes.slice() });
+    } else if (base.toLowerCase().endsWith('.sf2')) {
+      fonts.push({ name: base.slice(0, -'.sf2'.length), kind: 'soundfont', bytes: file.bytes.slice() });
+    }
+  }
+  return { ok: true, bundle: { songJson, plugins, samples, kits, fonts } };
 }
 
 /** What a zip is, before anything opens it: a song bundle, a plugin, or neither. */

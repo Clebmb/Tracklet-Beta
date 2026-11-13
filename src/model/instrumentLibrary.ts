@@ -139,6 +139,16 @@ export interface InstrumentEntry {
   detail: string;
   /** The playable instrument. What the `font` wave actually plays. */
   font: SoundFont;
+  /**
+   * The FILE it was read from, kept so it can travel.
+   *
+   * A parsed `SoundFont` cannot be written back out — there is no `.sf2` writer in
+   * here and no reason to grow one — so the only honest way for a bundle to carry
+   * an instrument is to carry the bytes it arrived in. Absent on entries built by
+   * hand (a test, or an instrument this session synthesised), which is exactly the
+   * case where there is nothing to carry.
+   */
+  bytes?: Uint8Array;
 }
 
 /** A whole library: the instruments, and which one the `font` wave plays. */
@@ -557,7 +567,18 @@ export function instrumentEntryFor(
   font: SoundFont,
   detail: string,
   kind: InstrumentKind = 'noislet',
+  bytes?: Uint8Array,
 ): InstrumentEntry {
   const tidy = importedName(name);
-  return { id: instrumentId(kind, tidy), name: tidy, kind, detail, font };
+  return {
+    id: instrumentId(kind, tidy),
+    name: tidy,
+    kind,
+    detail,
+    font,
+    // A copy, so a later edit to whatever buffer the file was read into cannot
+    // reach back into the library. Copied through `Uint8Array.from` because
+    // `.slice()` on a Node Buffer returns a Buffer, which is not the type here.
+    ...(bytes === undefined ? {} : { bytes: Uint8Array.from(bytes) }),
+  };
 }

@@ -270,6 +270,30 @@ describe('a song bundle carries the song plus what it names', () => {
     expect(parsed.bundle.kits).toEqual([{ name: 'MYHOUSE', json: kit }]);
   });
 
+  it('carries the RECORDED INSTRUMENT, both kinds, with its bytes intact', () => {
+    // A song says `wave font` and never names the font, and this build cannot write
+    // a soundfont — so the file the instrument was read from is the only thing a
+    // pack can carry.
+    const sf2 = Uint8Array.from([0x52, 0x49, 0x46, 0x46, 1, 2, 3]);
+    const noislet = new TextEncoder().encode('{"format":"noislet.instrument"}');
+    const bytes = buildSongBundle({
+      songJson,
+      plugins: [],
+      samples: [],
+      fonts: [
+        { name: 'FIRE BED', kind: 'soundfont', bytes: sf2 },
+        { name: 'FOOTSTEPS', kind: 'noislet', bytes: noislet },
+      ],
+    });
+    const parsed = parseSongBundle(bytes);
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(parsed.bundle.fonts.map((font) => font.name)).toEqual(['FIRE BED', 'FOOTSTEPS']);
+    expect(parsed.bundle.fonts[0]?.kind).toBe('soundfont');
+    expect(parsed.bundle.fonts[0]?.bytes).toEqual(sf2);
+    expect(parsed.bundle.fonts[1]?.kind).toBe('noislet');
+    expect(parsed.bundle.fonts[1]?.bytes).toEqual(noislet);
+  });
+
   it('refuses a kit inside a bundle that is not JSON, naming it', () => {
     const broken = zipStore([
       { name: 'song.json', bytes: new TextEncoder().encode(songJson) },

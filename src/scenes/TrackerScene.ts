@@ -387,7 +387,7 @@ import { fetchPluginBundle, importModuleText, installBundledPlugin, installPlugi
 import { denyPermission, grantedPermissions, grantPermission } from '../plugins/grants';
 import { pluginFromId } from '../plugins/registry';
 import { uninstallPluginEverywhere, type PluginStoredState } from '../plugins/uninstall';
-import { buildSongBundle, parseSongBundle, songBundleFileName } from '../plugins/bundle';
+import { buildSongBundle, parseSongBundle, songBundleFileName, type SongBundleFont } from '../plugins/bundle';
 import { countMachineHits } from '../model/machine';
 import {
   createPanelCodeBank,
@@ -2402,6 +2402,10 @@ export class TrackerScene extends Phaser.Scene {
         kits: this.savedKits
           .filter((kit) => kit.name === this.song.kit)
           .map((kit) => ({ name: kit.name, json: kit })),
+        // The recorded instrument, when the song plays one and this machine still
+        // has the file it was read from. A song says `wave font` and never names
+        // the font, so "the instrument the song plays" is simply the one loaded.
+        fonts: this.fontsForPack(),
       }),
       details,
     };
@@ -2430,6 +2434,21 @@ export class TrackerScene extends Phaser.Scene {
     }
     downloadBytes(out.fileName, 'application/zip', out.bytes);
     this.toast.show(`PACKED  ${out.fileName}`, activeColors().ward);
+  }
+
+  /**
+   * The recorded instrument a pack should carry: the one the song plays, when
+   * the song plays one and this machine has the file behind it.
+   *
+   * Nothing is carried for a song of built-in waves — the common case — because a
+   * pack that ships somebody's soundfont uninvited is weight at best and a licence
+   * problem at worst.
+   */
+  private fontsForPack(): SongBundleFont[] {
+    if (!songUsesFont(this.song)) return [];
+    const loaded = activeInstrument(this.instruments);
+    if (loaded === null || loaded.bytes === undefined) return [];
+    return [{ name: loaded.name, kind: loaded.kind, bytes: loaded.bytes }];
   }
 
   /**
@@ -2486,6 +2505,17 @@ export class TrackerScene extends Phaser.Scene {
     for (const sample of parsed.bundle.samples) {
       const result = this.openSampleAction(sample.name, sample.wavBytes.slice().buffer);
       if (result.tone === 'error') report.push(`${sample.name}: ${result.status}`);
+    }
+    // The recorded instruments the bundle carried, installed the way a picked file
+    // is — into the library, so the song that follows plays them and so the person
+    // opening it can see the instrument rather than wonder where it came from.
+    for (const font of parsed.bundle.fonts) {
+      const result = font.kind === 'noislet'
+        ? this.openInstrumentAction(`${font.name}.instrument.json`, decodeInstrumentText(font.bytes))
+        : this.openSoundFontAction(`${font.name}.sf2`, font.bytes.slice().buffer as ArrayBuffer);
+      report.push(result.tone === 'error'
+        ? `"${font.name}" did not install: ${result.status}`
+        : `"${font.name}" arrived with the pack.`);
     }
     // The kits the bundle carried, seated before the song opens so the song
     // lands on the drums it names rather than the fallback. The library is told
@@ -7114,11 +7144,15 @@ export class TrackerScene extends Phaser.Scene {
       return { status: `COULD NOT LOAD  ${name}`, details: result.errors, tone: 'error' };
     }
     const label = result.font.name || name.replace(/\.sf2$/i, '');
+    // The bytes are kept on the entry so a PACK can carry the instrument: this
+    // build reads a soundfont and cannot write one, so the file is the only thing
+    // that can travel.
     return this.keepInstrument(instrumentEntryFor(
       label,
       result.font,
       describeFont(result.font),
       'soundfont',
+      new Uint8Array(bytes.slice(0)),
     ), `LOADED  ${label}`);
   }
 
@@ -7448,7 +7482,7 @@ export class TrackerScene extends Phaser.Scene {
       return { status: `COULD NOT IMPORT  ${name}`, details: result.errors, tone: 'error' };
     }
     return this.keepInstrument(
-      instrumentEntryFor(result.name, result.font, result.detail),
+      instrumentEntryFor(result.name, result.font, result.detail, 'noislet', new TextEncoder().encode(text)),
       `IMPORTED  ${result.name}`,
       result.warnings,
     );

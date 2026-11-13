@@ -460,6 +460,13 @@ Bytes in, answers out; the scene collects the parts and acts on them.
   the voices a bundle arrived with the right name and the wrong drums, falling back
   to a preset and saying nothing. A kit file that does not parse refuses the whole
   bundle, which is the plugins' rule one folder over.
+- `BUNDLE_FONT_DIR` (`fonts`) — a RECORDED INSTRUMENT the song plays, as
+  `fonts/<NAME>.sf2` or `<NAME>.instrument.json`, packed only when the song plays
+  `wave font`. The bytes travel rather than the parsed font, because this build
+  reads a soundfont and cannot write one; and only the instrument the song plays is
+  packed, since a song says `wave font` and never names the font. Opening a bundle
+  installs it into the instrument list, the way a picked file does, so the song
+  that follows plays it and the person can see where it came from.
 - `songBundleFileName(stem)` — `<stem>.tracklet-bundle.zip`, beside `<stem>.json`.
 - `bundleSampleName(name)` — the file a recording travels under, path
   characters folded.
