@@ -711,6 +711,29 @@ describe('the agent briefs', () => {
   });
 });
 
+describe('the limits the pages state', () => {
+  it('gives the channel ceiling this build really has', () => {
+    // Prose numbers are the one thing here nothing compiles. The ceiling moved
+    // from eight to sixteen and several pages went on saying eight, which an agent
+    // reads as a hard limit and obeys — so the pages are checked against the model
+    // rather than trusted.
+    const patterns = [
+      /tracks <1[–-]8>/,
+      /\| Channels \| 1[–-]8 \|/,
+      /channel number 1[–-]8\b/,
+      /\| `tracks` \| 1[–-]8 \|/,
+      /How many channels the song has \(1[–-]8\)/,
+    ];
+    const stale = agentPages().flatMap((page) =>
+      patterns.filter((pattern) => pattern.test(page.text)).map((pattern) => `${page.name}: ${pattern}`),
+    );
+    expect(stale.join('\n')).toBe('');
+    // And somewhere says the real number, so the pages cannot all be silent.
+    const stated = agentPages().some((page) => /tracks <1[–-]16>/.test(page.text));
+    expect(stated).toBe(true);
+  });
+});
+
 describe('the skill page', () => {
   it('loads as a skill: a name, and a description that says when to use it', () => {
     const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(SKILL)?.[1] ?? '';

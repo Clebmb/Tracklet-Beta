@@ -46,7 +46,7 @@ import { DEFAULT_LEVEL, clampLevel } from './song';
 /**
  * How many buses a song may define.
  *
- * Four, and the number is derived rather than chosen: this app has at most
+ * Four, and it is a LAYOUT decision: this app has at most
  * `MAX_TRACKS` channels, and a group of ONE channel is just that channel's fader —
  * so the most groups that can each hold at least two channels is half of them.
  * Eight faders and four group faders is a mixing desk; eight of each is a

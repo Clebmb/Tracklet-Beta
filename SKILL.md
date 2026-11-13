@@ -76,7 +76,7 @@ section <NAME> <pattern numbers…>          # name a group of bars
 arrange <NAME…>                            # build the order out of section names
 progression <chords…> [hold N]             # the chord loop the song hangs on
 bus <NAME> <0-100>                         # one fader over several channels
-tracks <1-8>                               # BEFORE any track line or 5th+ column
+tracks <1-16>                              # BEFORE any track line or a 9th+ column
 track <N> …                                # one channel: name, sound, level, sends, effects
 pattern <N> "<NAME>"                       # start writing a pattern
 <one grid row per step, at most `tracks` columns>
@@ -137,7 +137,7 @@ over.
 | `pack` | deep | Write the song as ONE file that carries its samples and pinned plugins, so it plays elsewhere: `pack save`. |
 | `page` | deep | Which full screen is showing: `page arranger`, `page mixer`, `page live`, `page recorder`, `page arp` — or `page plugin:com.example.meter-panel` for a plugin panel (spelling-checked, resolved when it opens; an id this machine lacks leaves the tracker up with a notice). A session setting, so one script can drive every tab. |
 | `live` | deep | How a launch lands: `live quantize 4` waits for the next four bars before a queued scene takes over; `0` (or `off`) is immediate. A session setting, so no file carries it. |
-| `tracks` | core | How many channels the song has (1–8). Before any `track` line. |
+| `tracks` | core | How many channels the song has (1–16, two banks of eight). Before any `track` line. |
 | `track` | core | One channel: name, sound, level, pan, sends, effects, mute. |
 | `sample` | deep | Bring a `.wav` into the app (`sample load "path"`, `sample import`) and name it on a track line. |
 | `record` | deep | A TAKE: capture one from the microphone (`record HOOK`), shape its window (`record trim HOOK 0.1 2.0`, `record loop HOOK 1.0 3.0`) or pick the one the page shows (`record select HOOK`). App state, never in the song. |
@@ -344,7 +344,7 @@ TRACK follow` and `note ROW TRACK follow`. `progression none` clears the loop.
 
 | Thing | Range | Default |
 | --- | --- | --- |
-| `tracks` | 1–8 | 4 |
+| `tracks` | 1–16 | 4 |
 | `steps` | 1–512 | 16 |
 | `beat` | 1–16 | 4 |
 | `tempo` | 40–300 | 120 |

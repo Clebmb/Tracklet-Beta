@@ -660,8 +660,8 @@ them.
   later in the same script just moves the whole kit.
 - **A bus has one knob**, a level: no mute, no solo, no effects. Muting is still a
   channel's own business, and soloing is still about listening. A song may have at
-  most four groups, which is as many as eight channels can use without a group of
-  one.
+  most four groups — what the MIXER page draws, so the ceiling is the page rather
+  than the music.
 - **By hand:** through the `SCRIPT` button and a line of text — `bus DRUMS 70`,
   then `bus DRUMS` on each drum's `track` line — or from a saved `.txt`, exactly
   like every other setting in the language. The mixer screen has no group page
@@ -1111,7 +1111,7 @@ into the box and press `APPLY`, exactly as above.
   patterns.
 - **Track / channel** — one INSTRUMENT. It has a name, a SOUND (a named voice or
   a waveform plus nine knobs), a mute state, and one note per step at most.
-  Channels 1–8, and a channel may be **polyphonic** (`track 3 poly 6`), holding up
+  Channels 1–16, shown as two banks of eight, and a channel may be **polyphonic** (`track 3 poly 6`), holding up
 to eight notes at once, so notes that overlap in TIME ring through each other
   rather than each new one cutting the last.
 - **Step / row** — one slice of time, numbered from 0. Four steps make one beat

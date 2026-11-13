@@ -1583,8 +1583,10 @@ the hall.
   same reason: it is named inside a `track` line, which is a sentence of `setting
   value` pairs.
 - **A song may have at most 4 groups.** A group of one channel is just that
-  channel's fader, and a song here has at most eight channels, so four is the most
-  a song can use without one of them being pointless.
+  channel's fader, so a large song would want more — but four is what the MIXER
+  page draws without scrolling, and the ceiling is a layout decision rather than a
+  musical one. It used to be `MAX_TRACKS / 2`, which was four only because a song
+  had eight channels; sixteen channels did not silently double it.
 - **A bus has one knob: a level.** There is no mute and no solo on a group — a
   channel's own mute and the app's solo work on channels — and no effects or
   sends, because a group here is a FADER rather than a second mixer.
@@ -4070,7 +4072,7 @@ script that describes the whole thing again (start with `new`).
 | Thing | Range | Default | Statement |
 | --- | --- | --- | --- |
 | Tempo | 40–300 BPM | 120 | `tempo` |
-| Channels | 1–8 | 4 | `tracks` |
+| Channels | 1–16 | 4 | `tracks` |
 | Patterns | 1–128 | 1 | `pattern`, `copy` |
 | Steps per pattern | 1–512 | **16** | `steps` |
 | Steps per beat (grid resolution) | 1–16 | 4 | `beat`, or the same bar in note values with `grid`/`meter` |

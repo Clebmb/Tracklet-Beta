@@ -1623,9 +1623,9 @@ one mistake here that looks like a correct line.
 
 ### `a song may have at most <N> buses, and this one already has <N>. Use one of the names it has, or replace one.`
 
-The fifth distinct group. A song here has at most eight channels, and a group of
-one channel is just that channel's fader — so four groups is the most a song can
-use without one of them being pointless. Redefining a name that already exists
+The fifth distinct group. A group of one channel is just that channel's fader, and
+the MIXER page draws four groups without scrolling — so four is the ceiling, and
+it is a layout decision rather than a musical one. Redefining a name that already exists
 REPLACES it rather than being refused, so the fix is usually to reuse a name.
 
 **Fix:** `bus DRUMS 60` again to move the group, or squeeze more into the four.

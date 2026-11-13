@@ -163,7 +163,7 @@ swing <0-100, omit for straight>
 volume <0-100, omit to leave the mix alone>
 reverb <0-100, omit for a dry room>
 echo <0-100, omit for no repeats>
-tracks <1-8>
+tracks <1-16>
 
 track 1 "<NAME>" voice <lead|pluck|bell|glass>            level 100
 track 2 "<NAME>" voice <bass|sub>                          level 65

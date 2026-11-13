@@ -48,7 +48,7 @@ export const songOperations: ApiOperation[] = [
       title: field('string', 'The song title, at most 32 characters.'),
       key: field('string', 'The key and scale, e.g. "D minor" or "A pentatonic".'),
       tempo: field('number', 'Beats per minute, 40-300.'),
-      tracks: field('number', 'How many channels, 1-8.'),
+      tracks: field('number', 'How many channels, 1-16.'),
       steps: field('number', 'How many steps each pattern holds, 1-512.'),
       beat: field('number', 'How many steps are one beat, 1-16.'),
     }),
