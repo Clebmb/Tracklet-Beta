@@ -27,6 +27,7 @@ import {
   patternRows,
   songFromJson,
   songToJson,
+  songUsesFont,
   usedTracks,
   type Cell,
   type Song,
@@ -127,6 +128,8 @@ export interface SongDescription {
   title: string;
   /** Who made the song and what it borrows, or null when it says nothing. */
   credits: string | null;
+  /** True when a channel or pad plays `wave font`: the song needs an instrument. */
+  usesFont: boolean;
   key: string;
   bpm: number;
   steps: number;
@@ -227,6 +230,9 @@ export function describeSong(song: Song): SongDescription {
     // Who made it, when the song says — null rather than '' so a caller can tell
     // 'no credit' from 'an empty one'.
     credits: song.credits ?? null,
+    // Whether the song leans on somebody else's recorded instrument — the one
+    // dependency a pack cannot carry, so a caller handing a song over can say so.
+    usesFont: songUsesFont(song),
     key: keyName(song.key),
     bpm: song.bpm,
     steps: patternRows(song),

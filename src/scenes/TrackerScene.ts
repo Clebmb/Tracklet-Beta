@@ -199,6 +199,7 @@ import {
   userKitFromName,
   parseUserKits,
   shareLink,
+  songUsesFont,
   shareSongFromUrl,
   withUserKit,
   MAX_USER_KITS,
@@ -2381,6 +2382,13 @@ export class TrackerScene extends Phaser.Scene {
       `${plugins.length} PLUGIN${plugins.length === 1 ? '' : 'S'}  ·  ${samples.length} SAMPLE${samples.length === 1 ? '' : 'S'}`,
       ...skipped.map((id) => `"${id}" travels by reference - its code is not on this machine.`),
       ...missingSamples.map((name) => `"${name}" travels by name - its recording is not in the bank.`),
+      // The one dependency a pack cannot carry: a song says `wave font` and never
+      // says WHICH instrument, so this is app state on purpose. Saying it here is
+      // the difference between the person at the other end hearing the wrong
+      // instrument and knowing why.
+      ...(songUsesFont(this.song)
+        ? [`This song plays a recorded instrument (\`wave font\`). A pack cannot carry one - a tune says \`wave font\` and never names the font - so whoever opens this needs the same instrument loaded, or the part falls back.`]
+        : []),
     ];
     return {
       fileName: songBundleFileName(stem),

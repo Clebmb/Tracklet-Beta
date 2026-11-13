@@ -2982,6 +2982,29 @@ export function patternRows(song: Song): number {
   return song.patterns[0]?.steps.length ?? DEFAULT_ROWS;
 }
 
+/**
+ * True when the song plays somebody else's RECORDED instrument — `wave font` on a
+ * channel, on one of its stacked layers, or on a drum machine pad.
+ *
+ * The one dependency a song can have that a bundle cannot satisfy, and the reason
+ * this exists as a question the app can ASK: a song says `wave font` and never
+ * names which font, so the instrument is app state, and a pack handed to somebody
+ * without it plays the `font` wave's silence-into-fallback and sounds wrong rather
+ * than merely different. Whatever the pack does about that, it has to be able to
+ * notice first.
+ */
+export function songUsesFont(song: Song): boolean {
+  const isFont = (params: { wave?: string } | undefined): boolean => params?.wave === 'font';
+  // A layer carries its WAVE directly (it is one player of the stacked sound),
+  // while a channel's own sound keeps it in `voice.params.wave`.
+  const stacked = song.tracks.some((track) => (track.stack ?? []).some(
+    (layer) => (layer as { wave?: string }).wave === 'font',
+  ));
+  if (stacked) return true;
+  if (song.tracks.some((track) => isFont(track.voice))) return true;
+  return (song.machine?.pads ?? []).some((pad) => isFont(pad.voice));
+}
+
 /** How long ONE pattern is, in steps. */
 export function patternLength(song: Song, index: number): number {
   return song.patterns[index]?.steps.length ?? patternRows(song);
