@@ -9,6 +9,9 @@ import { fetchPluginBundle, pluginMigrationNotices, songPluginIds } from '../plu
 import {
   buildSongBundle,
   bundleFileKind,
+  bundleSizeLabel,
+  bundleSizeProblem,
+  MAX_BUNDLE_BYTES,
   parseSongBundle,
   songBundleFileName,
 } from '../plugins/bundle';
@@ -292,6 +295,23 @@ describe('a song bundle carries the song plus what it names', () => {
     expect(parsed.bundle.fonts[0]?.bytes).toEqual(sf2);
     expect(parsed.bundle.fonts[1]?.kind).toBe('noislet');
     expect(parsed.bundle.fonts[1]?.bytes).toEqual(noislet);
+  });
+
+  it('refuses to make a pack too big to hold, with the numbers', () => {
+    // A pack is built whole in memory and the zip does not compress, so the one
+    // thing that can make it enormous is the recorded instrument. Refused rather
+    // than trimmed: a pack missing its font plays the wrong sound elsewhere.
+    expect(bundleSizeProblem(1024)).toBeNull();
+    expect(bundleSizeProblem(MAX_BUNDLE_BYTES)).toBeNull();
+    const why = bundleSizeProblem(MAX_BUNDLE_BYTES + 1);
+    expect(why).not.toBeNull();
+    expect(why).toContain(bundleSizeLabel(MAX_BUNDLE_BYTES));
+    expect(why).toContain('uncompressed');
+  });
+
+  it('labels a size the way a person reads one', () => {
+    expect(bundleSizeLabel(512 * 1024)).toBe('512 KB');
+    expect(bundleSizeLabel(5.2 * 1024 * 1024)).toBe('5.2 MB');
   });
 
   it('refuses a kit inside a bundle that is not JSON, naming it', () => {

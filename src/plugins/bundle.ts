@@ -48,6 +48,36 @@ export const BUNDLE_KIT_DIR = 'kits';
  * the parsed font, since this build can read a soundfont but cannot write one.
  */
 export const BUNDLE_FONT_DIR = 'fonts';
+
+/**
+ * The largest pack this build will hand back: 48 MiB.
+ *
+ * A pack is built WHOLE in memory — every sample, plugin and instrument in one
+ * array, then a download — so the ceiling is about the tab surviving rather than
+ * about taste. It also happens to be the number at which a store-only zip starts
+ * to look silly: this writer does not compress, which matters most for the one
+ * thing that can be tens of megabytes, a recorded instrument.
+ */
+export const MAX_BUNDLE_BYTES = 48 * 1024 * 1024;
+
+/** A byte count as a person reads it: `5.2 MB`, `412 KB`. */
+export function bundleSizeLabel(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * Why a pack of this size should not be made, or null when it is fine.
+ *
+ * Refused rather than trimmed: a pack with the instrument left out opens and
+ * plays the WRONG SOUND on the other machine, which is worse than not being made
+ * at all — the same judgement `shareLink` makes about a link that does not fit.
+ */
+export function bundleSizeProblem(bytes: number): string | null {
+  if (bytes <= MAX_BUNDLE_BYTES) return null;
+  return `this pack would be ${bundleSizeLabel(bytes)}, and a pack is built whole in memory before it is handed back, so the ceiling is ${bundleSizeLabel(MAX_BUNDLE_BYTES)}. The recorded instrument is usually the reason: a soundfont is megabytes and this build writes an uncompressed zip. Remove the instrument from the song (or play a built-in wave) and pack again.`;
+}
 /** A bundle download: `<stem>.tracklet-bundle.zip`, beside `<stem>.json`. */
 export function songBundleFileName(stem: string): string {
   return `${stem}.tracklet-bundle.zip`;

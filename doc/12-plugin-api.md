@@ -467,6 +467,11 @@ Bytes in, answers out; the scene collects the parts and acts on them.
   packed, since a song says `wave font` and never names the font. Opening a bundle
   installs it into the instrument list, the way a picked file does, so the song
   that follows plays it and the person can see where it came from.
+- `MAX_BUNDLE_BYTES` (48 MiB) / `bundleSizeProblem(bytes)` — the ceiling on a pack,
+  because one is built whole in memory before it is handed back. A pack past it is
+  REFUSED with its size and the reason rather than made, since a pack with its
+  instrument left out opens elsewhere and plays the wrong sound. The zip this build
+  writes does not compress, which matters most for exactly that instrument.
 - `songBundleFileName(stem)` — `<stem>.tracklet-bundle.zip`, beside `<stem>.json`.
 - `bundleSampleName(name)` — the file a recording travels under, path
   characters folded.

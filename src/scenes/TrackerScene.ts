@@ -387,7 +387,14 @@ import { fetchPluginBundle, importModuleText, installBundledPlugin, installPlugi
 import { denyPermission, grantedPermissions, grantPermission } from '../plugins/grants';
 import { pluginFromId } from '../plugins/registry';
 import { uninstallPluginEverywhere, type PluginStoredState } from '../plugins/uninstall';
-import { buildSongBundle, parseSongBundle, songBundleFileName, type SongBundleFont } from '../plugins/bundle';
+import {
+  buildSongBundle,
+  bundleSizeLabel,
+  bundleSizeProblem,
+  parseSongBundle,
+  songBundleFileName,
+  type SongBundleFont,
+} from '../plugins/bundle';
 import { countMachineHits } from '../model/machine';
 import {
   createPanelCodeBank,
@@ -2390,9 +2397,7 @@ export class TrackerScene extends Phaser.Scene {
         ? [`This song plays a recorded instrument (\`wave font\`). A pack cannot carry one - a tune says \`wave font\` and never names the font - so whoever opens this needs the same instrument loaded, or the part falls back.`]
         : []),
     ];
-    return {
-      fileName: songBundleFileName(stem),
-      bytes: buildSongBundle({
+    const bytes = buildSongBundle({
         songJson: songToJson(this.song, { volume: this.volume }, this.songPluginVersions()),
         plugins,
         samples,
@@ -2405,9 +2410,20 @@ export class TrackerScene extends Phaser.Scene {
         // The recorded instrument, when the song plays one and this machine still
         // has the file it was read from. A song says `wave font` and never names
         // the font, so "the instrument the song plays" is simply the one loaded.
-        fonts: this.fontsForPack(),
-      }),
-      details,
+      fonts: this.fontsForPack(),
+    });
+    // A pack is built whole in memory, so an enormous one is a tab that stops
+    // answering rather than a file that arrives slowly. Refused with the number,
+    // the ceiling and the reason — and never trimmed, because a pack missing its
+    // instrument plays the wrong sound on the other machine.
+    const tooBig = bundleSizeProblem(bytes.byteLength);
+    if (tooBig !== null) return { error: tooBig };
+    return {
+      fileName: songBundleFileName(stem),
+      bytes,
+      // The size first: it is the one thing a person wants to know before handing
+      // a file to somebody.
+      details: [`${bundleSizeLabel(bytes.byteLength)} ON DISK`, ...details],
     };
   }
 
