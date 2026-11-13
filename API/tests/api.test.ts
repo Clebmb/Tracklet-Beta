@@ -203,6 +203,26 @@ describe('songs', () => {
     expect(grid.text).toContain('kick');
   });
 
+  it('prints all sixteen channels, and each pattern at its own length', async () => {
+    // The grid is the API's window on the screen, so it is where a caller finds
+    // out that the sixteen-channel song and the long chorus really took.
+    const applied = unwrap<{ song: Record<string, unknown> }>(await api.script.apply({
+      script: 'tracks 16\nsteps 16\npattern 2 "B"\nsteps 32 pattern 2\nnote 0 16 C-4',
+    }));
+    const described = unwrap<{ tracks: number }>(await api.song.describe({ song: applied.song }));
+    expect(described.tracks).toBe(16);
+
+    const first = unwrap<{ text: string }>(await api.song.grid({ song: applied.song, pattern: 1 }));
+    const second = unwrap<{ text: string }>(await api.song.grid({ song: applied.song, pattern: 2 }));
+    // A header line plus one per step — sixteen for the verse, thirty-two for the
+    // pattern that named its own length.
+    expect(first.text.split('\n').length).toBe(17);
+    expect(second.text.split('\n').length).toBe(33);
+    // And the note on the SIXTEENTH channel is in the grid, not dropped by a
+    // printer that still believed the song was eight wide.
+    expect(second.text).toContain('C-4');
+  });
+
   it('counts the cells that carry a clause, so an agent can check its phrasing landed', async () => {
     // `notes` cannot answer this: twenty pushes change no pitch at all, and a grid
     // is six hundred characters of proof nobody reads.
