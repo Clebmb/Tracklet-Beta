@@ -258,8 +258,6 @@ const HINTS: readonly string[] = [
   'CTRL+C/V COPY \u00b7 B A/B \u00b7 SPACE',
 ];
 
-const FALLBACK_STATUS = 'EVERY CONTROL HERE MOVES THE SONG. SOLO IS ONLY HOW YOU LISTEN.';
-
 /** Which theme colour a piece of static copy wears, so a recolour can find it. */
 type TextRole = 'heading' | 'body' | 'accent' | 'dim';
 
@@ -1019,10 +1017,17 @@ export class MixerView {
     if (title !== '') this.pushText(rect.x + 8, rect.y + 5, title, c.ooze);
   }
 
-  /** The strips' heading row: what just happened, right-aligned in the panel. */
+  /**
+   * The strips' heading row: what just happened, right-aligned in the panel.
+   *
+   * Empty until something happens. It used to hold a standing sentence about the
+   * page's promise, which said the same thing every time and read as part of the
+   * furniture rather than as news.
+   */
   private drawStatus(c: UiColors): void {
-    const text = this.status === '' ? FALLBACK_STATUS : this.status;
-    this.pushText(STRIPS.x + STRIPS.width - 8, STRIPS.y + 6, clip(text, 42), this.status === '' ? c.textDim : c.textPrimary, 1);
+    if (this.status !== '') {
+      this.pushText(STRIPS.x + STRIPS.width - 8, STRIPS.y + 6, clip(this.status, 42), c.textPrimary, 1);
+    }
     drawDivider(this.frame, STRIPS.x + 4, STRIPS.y + 17, STRIPS.width - 8, 1, c);
   }
 
