@@ -328,6 +328,18 @@ A bare `key` line.
 **Fix:** put a note and a scale after it. A bare note alone is fine and means
 major: `key C`.
 
+### `"<x>" is a cell spelling, not a note: clauses like :late2 ride on a grid row, and push, seek, pan and fade are lines of their own.`
+
+The clause was written where a pitch belongs — `note 0 1 C-4:late2`. The
+`:`+keyword spelling is a way of writing ONE CELL, so it only exists in a grid
+row; on a statement the gesture is its own line.
+
+```
+note 0 1 C-4:late2        # a cell spelling cannot go on a `note` line
+C-4:late2 . . .           # ...this is where it goes: a grid row
+push 1 1 1 1              # or the statement, in a `note` line's place
+```
+
 ### `credits needs the line itself, e.g. credits "MADE BY ... — break from a 1972 record", or credits clear to take it off.`
 
 A bare `credits` with nothing after it. It is free text, so there is nothing to

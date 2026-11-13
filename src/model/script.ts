@@ -5477,6 +5477,13 @@ export function parseScript(
         }
         const midis = EMPTY_TOKENS.has(pitchText) ? [] : parseCellPitches(pitchText, state.octave);
         if (midis === null) {
+          // A clause written on a `note` line is the mistake people actually make:
+          // the suffix is a CELL spelling, and "is not a note" sends them looking
+          // at their pitch instead of at where they put the clause.
+          if (pitchText.includes(':')) {
+            fail(lineNumber, `"${args_[2]}" is a cell spelling, not a note: clauses like :late2 ride on a grid row, and push, seek, pan and fade are lines of their own.`);
+            break;
+          }
           fail(lineNumber, `"${args_[2]}" is not a note. Use C0..B8 with an optional # or b, e.g. C-4, C#4, Eb5 — or "." to erase.`);
           break;
         }
