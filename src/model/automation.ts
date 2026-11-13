@@ -240,15 +240,30 @@ export function isAutomationTarget(word: string): word is AutomationTargetId {
 /**
  * As many lanes as a song may have.
  *
- * The same ceiling and the same reason as `MAX_TEMPO_POINTS`: an arrangement is a
- * list of bars, thirty-two moving values is more movement than any song has, and
- * a limit is what stops a runaway generator from writing a file that takes a
- * second to open. It is also small enough that reading a lane per note is free.
+ * The same reason as `MAX_TEMPO_POINTS`: a limit is what stops a runaway
+ * generator from writing a file that takes a second to open, and it is small
+ * enough that reading a lane per note is free.
+ *
+ * It doubled with `MAX_ORDER`: thirty-two lanes was two per channel on a short
+ * song, and a song long enough to need 256 bars is long enough for a riser, a
+ * fade and a filter move on every part at once. The ARRANGER's lane list
+ * already scrolls, so the extra lanes cost it nothing.
  */
-export const MAX_AUTOMATION_LANES = 32;
+export const MAX_AUTOMATION_LANES = 64;
 
 /**
- * One value moving over a range of bars.
+ * What a lane counts its range in.
+ *
+ * `bars` is the clock every lane had first: a slot of the `order`, so a riser
+ * spans bars 8 to 15 of the SONG. `note` is the other one, and it is the smaller
+ * and older clock in music: steps since each HIT on the channel — so the same
+ * lane is an envelope every note on that channel plays, whatever bar it lands in.
+ * A sixteen-note bassline gets one sweep per note instead of one per section.
+ */
+export type AutomationClock = 'bars' | 'note';
+
+/**
+ * One value moving over a range — of bars, or of steps since a hit.
  *
  * Plain data, like every other part of a song: it is written to a file, cloned by
  * the undo stack and compared by a test, and none of that needs a class.
@@ -261,10 +276,84 @@ export interface AutomationLane {
   from: number;
   /** The value on its last step, held afterwards. */
   to: number;
-  /** The bar it starts on, 1-based: a slot of the `order`. */
+  /**
+   * Where the lane starts: a bar of the `order` on the bars clock (1-based), or a
+   * STEP SINCE THE HIT on the note clock (0 being the hit itself).
+   *
+   * One field for two clocks rather than two pairs of numbers, because it is one
+   * idea — where the walk begins — and a second pair would have to be kept empty
+   * on every lane of the other clock. Which one a lane means is `clock`.
+   */
   startBar: number;
-  /** The bar it ends on, inclusive. */
+  /** Where it ends, inclusive, in the same unit as `startBar`. */
   endBar: number;
+  /**
+   * Which clock the two numbers above are counted in. Absent means `bars`, so a
+   * lane written before this existed — in a test, in a fixture, in a file from
+   * last week — reads exactly as it always did.
+   */
+  clock?: AutomationClock;
+}
+
+/** How many steps after a hit a note-clock lane may reach. */
+export const MAX_NOTE_CLOCK_STEPS = 64;
+
+/** The clock a lane reads on, with the old default filled in. */
+export function laneClock(lane: AutomationLane): AutomationClock {
+  return lane.clock === 'note' ? 'note' : 'bars';
+}
+
+/**
+ * Whether a target can ride the note clock.
+ *
+ * Only `level`, and that is a fact about the two consumers rather than a
+ * preference: the app re-writes a channel's level on EVERY step (that is how a
+ * fade keeps moving through bars where nothing plays), so a lane counted from the
+ * hit has somewhere to land on every step of the note. A knob is read when the
+ * note is BUILT — one value, at the moment of the hit — so a per-note sweep of
+ * `bright` needs the scheduler to ramp a parameter inside a note, which is the
+ * next piece of work and not something to pretend to.
+ */
+export function supportsNoteClock(target: AutomationTargetId): boolean {
+  // `bright` is the second, and it is the same fact in a different place: the two
+  // consumers hand the note builder a curve of the lane's points, and the builder
+  // schedules them across the note's own filter — a cutoff is one number a filter
+  // node will take at any moment, which is the whole requirement. A knob that
+  // changes the SHAPE of the sound (its wave, its noise mix) cannot be faded that
+  // way, and a gate cannot either: it is how long the note is, decided once.
+  return target === 'level' || target === 'bright';
+}
+
+/**
+ * The points a note-clock lane puts on a target, or null when none moves it.
+ *
+ * Read as "where the value is N steps after the hit", for the note builder to
+ * schedule across the note. The range is the lane's own: it walks to `to` on its
+ * last step and holds it, which is exactly the walk `laneValueAt` describes step
+ * by step — so a curve and a per-step read of the same lane cannot disagree.
+ */
+export function noteClockCurve(
+  lanes: readonly AutomationLane[],
+  track: number,
+  target: AutomationTargetId,
+): { step: number; value: number }[] | null {
+  const noteLanes = lanes.filter((lane) =>
+    lane.track === track && lane.target === target && laneClock(lane) === 'note');
+  if (noteLanes.length === 0) return null;
+  let last = 0;
+  for (const lane of noteLanes) last = Math.max(last, clampNoteClockStep(lane.endBar));
+  const points: { step: number; value: number }[] = [];
+  for (let step = 0; step <= last; step++) {
+    const value = automatedValue(noteLanes, track, target, 0, 1, step);
+    if (value !== null) points.push({ step, value });
+  }
+  return points.length > 0 ? points : null;
+}
+
+/** A step since a hit, clamped into what a note-clock lane can address. */
+export function clampNoteClockStep(step: number): number {
+  if (!Number.isFinite(step)) return 0;
+  return Math.max(0, Math.min(MAX_NOTE_CLOCK_STEPS, Math.round(step)));
 }
 
 /** Clamp a bar into the range an arrangement can have. Same range as `order`. */
@@ -320,10 +409,16 @@ export function clampAutomationTrack(track: number, channels: number): number {
 
 /** One lane, with every field inside the range its own tables allow. */
 export function tidyLane(lane: AutomationLane): AutomationLane {
-  const startBar = clampAutomationBar(lane.startBar);
-  const endBar = Math.max(startBar, clampAutomationBar(lane.endBar));
   const target = isAutomationTarget(lane.target) ? lane.target : 'bright';
-  return {
+  // A clock the target cannot ride falls back to bars rather than being kept and
+  // quietly ignored: a lane that claims a clock nothing reads is a lane that lies
+  // about itself in a file.
+  const note = laneClock(lane) === 'note' && supportsNoteClock(target);
+  const startBar = note ? clampNoteClockStep(lane.startBar) : clampAutomationBar(lane.startBar);
+  const endBar = note
+    ? Math.max(startBar, clampNoteClockStep(lane.endBar))
+    : Math.max(startBar, clampAutomationBar(lane.endBar));
+  const tidied: AutomationLane = {
     track: clampAutomationTrack(lane.track, MAX_ORDER),
     target,
     from: clampAutomationValue(target, lane.from),
@@ -331,6 +426,8 @@ export function tidyLane(lane: AutomationLane): AutomationLane {
     startBar,
     endBar,
   };
+  if (note) tidied.clock = 'note';
+  return tidied;
 }
 
 /**
@@ -378,8 +475,28 @@ export function lanesFor(
  * holding it. The bar arithmetic is the same one `tempoMapBpm` does: a bar is one
  * pattern, so a step's position inside the arrangement is `step / stepsPerBar`.
  */
-export function laneValueAt(lane: AutomationLane, step: number, stepsPerBar: number): number | null {
+export function laneValueAt(
+  lane: AutomationLane,
+  step: number,
+  stepsPerBar: number,
+  sinceHit: number | null = null,
+): number | null {
   const target = lane.target;
+  // The note clock: `step` is steps SINCE THE HIT and the bar length is irrelevant,
+  // because a note's own length has nothing to do with the song's meter. A caller
+  // that has no hit to count from (a lane read for a knob, an audition) gets null,
+  // which is "nothing to say" rather than "zero".
+  if (laneClock(lane) === 'note') {
+    if (sinceHit === null || !Number.isFinite(sinceHit)) return null;
+    const first = clampNoteClockStep(lane.startBar);
+    if (sinceHit < first) return null;
+    const span = Math.max(1, clampNoteClockStep(lane.endBar) - first + 1);
+    const from = clampAutomationValue(target, lane.from);
+    const to = clampAutomationValue(target, lane.to);
+    if (span <= 1) return to;
+    const t = Math.min(1, (sinceHit - first) / (span - 1));
+    return clampAutomationValue(target, from + (to - from) * t);
+  }
   const perBar = Math.max(1, Math.round(stepsPerBar));
   const first = (clampAutomationBar(lane.startBar) - 1) * perBar;
   if (step < first) return null;
@@ -409,12 +526,15 @@ export function automatedValue(
   target: AutomationTargetId,
   step: number,
   stepsPerBar: number,
+  /** Steps since the channel's last hit, for a note-clock lane. Null when it has
+   * played nothing yet, which leaves such a lane silent until the first note. */
+  sinceHit: number | null = null,
 ): number | null {
   if (lanes.length === 0) return null;
   let value: number | null = null;
   for (const lane of lanes) {
     if (lane.track !== track || lane.target !== target) continue;
-    const at = laneValueAt(lane, step, stepsPerBar);
+    const at = laneValueAt(lane, step, stepsPerBar, sinceHit);
     if (at !== null) value = at;
   }
   return value;
@@ -459,8 +579,9 @@ export function automatedLevel(
   level: number,
   step: number,
   stepsPerBar: number,
+  sinceHit: number | null = null,
 ): number | null {
-  const value = automatedValue(lanes, track, 'level', step, stepsPerBar);
+  const value = automatedValue(lanes, track, 'level', step, stepsPerBar, sinceHit);
   return value === null || value === clampLevel(level) ? null : value;
 }
 
@@ -501,6 +622,7 @@ export function sameLane(a: AutomationLane, b: AutomationLane): boolean {
     && a.target === b.target
     && a.from === b.from
     && a.to === b.to
+    && laneClock(a) === laneClock(b)
     && a.startBar === b.startBar
     && a.endBar === b.endBar;
 }
@@ -514,13 +636,26 @@ export function sameLane(a: AutomationLane, b: AutomationLane): boolean {
  */
 export function laneLabel(lane: AutomationLane): string {
   const info = automationTargetInfo(lane.target);
-  const bars = lane.startBar === lane.endBar ? `BAR ${lane.startBar}` : `BARS ${lane.startBar}-${lane.endBar}`;
-  return `CH ${lane.track} ${info?.label ?? lane.target} ${lane.from} -> ${lane.to} · ${bars}`;
+  // The range says which clock it is: STEPS for a lane counted from each hit,
+  // BARS for one counted across the song. A label that always said BARS would be
+  // a menu lying about a lane it is showing.
+  const note = laneClock(lane) === 'note';
+  const span = lane.startBar === lane.endBar
+    ? `${note ? 'STEP' : 'BAR'} ${lane.startBar}`
+    : `${note ? 'STEPS' : 'BARS'} ${lane.startBar}-${lane.endBar}`;
+  return `CH ${lane.track} ${info?.label ?? lane.target} ${lane.from} -> ${lane.to} · ${span}`;
 }
 
-/** How the app writes one lane as a script line, so a song can save and reopen. */
+/**
+ * How the app writes one lane as a script line, so a song can save and reopen.
+ *
+ * The clock word is part of the sentence: a note-clock lane written as `bars`
+ * would reopen as a bar lane, which is the one thing a save must never do —
+ * quietly changing what a lane means.
+ */
 export function laneScript(lane: AutomationLane): string {
-  return `automate ${lane.track} ${lane.target} ${lane.from} ${lane.to} bars ${lane.startBar} to ${lane.endBar}`;
+  const clock = laneClock(lane) === 'note' ? 'note' : 'bars';
+  return `automate ${lane.track} ${lane.target} ${lane.from} ${lane.to} ${clock} ${lane.startBar} to ${lane.endBar}`;
 }
 
 /**

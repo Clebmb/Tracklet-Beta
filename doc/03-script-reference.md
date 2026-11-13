@@ -277,7 +277,35 @@ word, and the note beside it is the kit's own:
 | `hat*3` | three hat ticks inside one step — a trap roll |
 | `wind` | a hiss, for a build-up or a breakdown |
 
-The four words are `kick`, `snare`, `hat` and `wind`, and they are a **closed
+**A stop.** A cell can also END a note instead of starting one — `off` releases the
+channel on that step, `cut` chokes it:
+
+| Written | Means |
+| --- | --- |
+| `off` | let the channel go — a pad fades away, a bass thuds to a stop |
+| `cut` | bite it off in a few milliseconds, for a chopped sample |
+
+A stop is a whole STEP on one channel: it holds no note, no chord and no drum, and
+writing a note over it takes it off again. Before stops existed a note rang for its
+channel's `hold` and the only way to end one early was to shorten the whole
+channel — which is why `off` on step 4 of a `hold 16` pad is the shortest sentence
+in the language:
+
+```script
+tracks 2
+track 1 "PAD" hold 16
+C-4 .
+off .
+```
+
+The gap between a `hold` and the stop is the whole point: the note is written
+ONCE and rings for sixteen steps, and the step that says `off` is where it ends.
+
+A stop takes no force and no gesture of its own (`off~40` is a typo, not a quieter
+stop), and it is written in a file as the bare word — `"off"` — which a build
+that reads file version 46 or older refuses rather than reading as an empty step.
+
+The four drum words are `kick`, `snare`, `hat` and `wind`, and they are a **closed
 list**: any other word is refused by name. Because a hit NAMES its sound, a whole
 kit can live on **one channel**, written as words rather than as pitches nobody
 can hear:
@@ -396,6 +424,22 @@ bar, where **shift-clicking the title** does the same edit by hand — same fiel
 same undo step, same 32-character ceiling, which is all the room the bar has
 before the title would run into the app's tagline.
 
+### `credits "..."` — say who made it, and what it borrows
+
+```
+credits "MADE BY ME — break from a 1972 record, thanks to the drummer"
+credits clear          # take it off
+```
+
+Free text, up to 200 characters, kept with the song rather than in the app (a
+quote character inside it is dropped, the same rule `song` has, because the line
+is quoted text; the `.json` keeps what you put in it): it
+goes into the `.json`, into a pack, and comes back out as the same line. The
+reason is the pack's: a bundle exists so a song arrives *complete*, and who made
+it — and whose break is in it — is part of what a person hands over. A song that
+names none is byte-identical to the file it was, and one that does writes file
+version 56.
+
 ### `key D minor` — say what key the song is in
 
 ```
@@ -461,7 +505,7 @@ slide to 90 by bar 9 is halfway to 90 at bar 5. That is the difference between
 the two things people actually ask for — "the chorus is at 140" and "slow down
 into the ending" — in one word.
 
-`BAR` is a slot of the order, 1–64, **the same number `order` uses**, not a step
+`BAR` is a slot of the order, 1–256, **the same number `order` uses**, not a step
 number. So a song `order 1 2 1 2` has four bars, and `tempo 90 by 4` leans into
 its last one. Before the first change the song runs at its plain `tempo`, which
 is why a single `by` is a lean from bar 1 rather than a jump.
@@ -1083,9 +1127,10 @@ A-4 A-2 .   .
 .   .   .   .
 ```
 
-### `automate TRACK TARGET FROM TO bars A to B` — move a value over bars
+### `automate TRACK TARGET FROM TO bars A to B` — move a value over bars, or over each note
 
 ```
+automate 2 level 90 20 note 0 to 6    # EVERY note on ch2 decays over six steps
 automate 2 bright 15 95 bars 8 to 15   # a build: 8 bars of filter opening
 automate 5 level 0 100 bars 1 to 4    # a fade-in over the first four bars
 automate 3 gate 0 90 bars 9 to 16     # the last section tightens
@@ -1100,6 +1145,39 @@ which is the difference between a loop and a record — the riser before a drop,
 the filter opening across a build, the fade at the end, the pad that thickens as
 the chorus arrives. None of those are notes, so no amount of pattern editing can
 write them.
+
+**Two clocks, one word apart.** `bars A to B` counts bars of the `order` — the
+song's clock, 1-based, the numbers `order` and `tempo … at BAR` use. `note A to B`
+counts **steps since each hit on the channel**, `0` being the hit itself — the
+channel's clock, and the smaller one. The same lane is then an envelope every note
+on that channel plays, wherever it lands: a sixteen-note bassline gets a sweep per
+note instead of one sweep for the whole section, which is the difference between a
+part that moves and a part that is moved.
+
+```
+automate 4 level 100 30 note 0 to 3   # a stab that ducks on every hit
+automate 2 level 20 90 note 0 to 8    # every bass note swells as it holds
+```
+
+Two targets ride the note clock, and that is a fact rather than a rule: the app
+re-writes a channel's **level** on every step (that is how a fade keeps moving
+through silence), and a **bright** is scheduled across the note's own filter — the
+builder walks the lane's points and ramps the cutoff between them, so the sweep
+happens inside the note instead of once a section. A brightness lane REPLACES the
+`sweep` envelope for that note, because both are claims on one cutoff.
+
+The rest are read once, when the note is built — `gate` is how long it is, `drift`
+and the wave-shaped knobs are what it is made of — so a per-note walk of those
+would need a re-voice mid-note, and the refusal says so instead of pretending.
+
+The arranger writes the same lane without the language: select a lane and press
+`\` to switch it between `BARS` and `STEPS`, and the footer says which ruler you
+are on. A target that is read once refuses there too, with a line that names the
+two that can ride it.
+
+On one channel the level is the channel's, so a second note restarts the walk:
+chords share a gain, and a lane on the note clock moves the gain they share. A
+brightness is per note, so each note in a chord walks its own.
 
 `TARGET` is one of twelve words — or a plugin knob, spelled `param.<knob>`:
 
@@ -1301,7 +1379,7 @@ the shape every song has, rather than a name typed four times:
   numbers: write `repeat 4` rather than `repeat 2 repeat 2`. It is a MODIFIER on
   an existing statement, not a word of its own, so the language grew no command
   for it and a file stores the arrangement it expands into.
-- **A song may name at most 24 sections**, and an arrangement may total at most 64
+- **A song may name at most 48 sections**, and an arrangement may total at most 256
 bars, which is the most a song plays.
 - **`F3` shows the form**: each bar of the order wears the section it came from,
 as long as the order is still the arrangement that put it there. Press `F3` and the
@@ -1515,6 +1593,183 @@ the hall.
 - **A song with no groups is unchanged**, in the file and in the app: no key, no
   line, no `bus` word anywhere, and the same bytes on disk.
 
+### `table TRACK NAME HARMONICS…` / `table TRACK clear` — a wavetable of your own
+
+```
+track 1 "WAVE" wave table
+ table 1 ODD 1 0 0.5 0 0.2     # fundamental, no 2nd, half a 3rd, no 4th, a 5th
+table 1 clear                 # back to the chip bank `duty` picks
+```
+
+The `table` wave is the chip wavetable: a periodic wave whose shape `duty` picks
+from a fixed bank. This is the same instrument with a shape YOU wrote — a name and
+a list of harmonic amplitudes, from the fundamental upward. Every other voice here
+is a set of numbers; this is the one that used to be a bank.
+
+Harmonics run **-1 to 1** (negative is phase-inverted, 0 is absent) and there are
+at most 16, so `1 0 0.5` is hollow, `1 0.5 0.33 0.25` is a saw, and `1 0 0 0.5` is
+a clarinet's odd stack. A spectrum of all zeroes has no pitch to hear, so it is
+refused rather than stored — silence with a name is a bug, not a sound.
+
+The table lives on the CHANNEL rather than in a song-wide library, for a voice's
+reason: it is the sound of the thing that plays it, so it saves, loads and travels
+with the channel. `table 1 clear` wears the bank again, which is what every
+`wave table` channel meant before a table could be your own.
+
+### `slice TRACK START END` / `slice TRACK clear` — chop a recording into pieces
+
+```
+track 1 "BREAK" wave sample sample BRK
+slice 1 0 0.42        # C-4 plays the first 0.42s
+slice 1 0.42 0.9      # C#-4 the next, from where the first stopped
+slice 1 0.9 1.4       # D-4 the next
+slice 1 clear         # back to the whole recording
+```
+
+A **slice** is one piece of a recording, written in the recording's own SECONDS —
+so a chop point does not move when the tempo does. The note NUMBER picks the piece:
+C-4 is the first, C#-4 the second, D-4 the third. That is what turns a chopped
+break into an instrument instead of eight loaded files on eight channels.
+
+**Both ends are yours.** A piece ends where the chop says rather than ringing its
+tail over the next one, because a tail smeared across a chop is the mistake you can
+hear first. Pieces are kept in time order, so they can be written in any order; a
+note past the last piece plays the whole recording, so the keyboard above the chop
+still sounds, and a channel with no slices is the channel this app has always had.
+
+### The suffix spelling: `C-4:late2`
+
+Every clause a single cell can carry has a short spelling, written after a colon
+on the note itself:
+
+```
+C-4:late2          # two ticks behind the step
+hat:pan-30         # a hat left of centre
+C-4:seek25:fade40  # a quarter in, falling away over the last four tenths
+```
+
+The names are the **statements' own words** — `late`, `seek`, `pan`, `fade` — with
+the same ranges, and the parser expands each one into that statement for that
+cell. So `C-4:late2` and `push 1 0 1 2` land the identical cell, and there is one
+writer rather than two that can drift.
+
+A clause is stripped **before** the note tokeniser runs, so the gesture and force
+spellings are untouched: `C-4>*3:late2` still reads as a stutter with a push.
+
+### `fade PATTERN ROW TRACK PERCENT` — how a note leaves
+
+The percentage of the note's **own length** that is the fall; it is silent at the end:
+
+```
+fade 1 1 2 40    # the last four tenths of the note are the fade
+fade 1 1-4 2 40  # a whole span of hits, each fading over its own length
+fade 1 1 2 0     # back to the note's own envelope
+```
+
+A fade rather than a shorter `hold`, because they answer different questions:
+shortening the hold **cuts** a note off, and a fade lets it **fall**. It is applied
+to the whole voice, so it works on a sample as well as a synth — a looped pad or a
+one-shot break rings on its own clock and doesn't know the note is over — and a
+chord fades together rather than note by note.
+
+A song holding a faded note writes **file version 55**: an older build would hold
+it at full level to the end, which is the very thing the line was written to avoid.
+
+### `pan PATTERN ROW TRACK PLACE` — which way one hit leans
+
+`-100` is hard left, `100` hard right, `0` is the centre — and the value is
+**relative to the channel**, because the mixer still owns where that channel sits:
+
+```
+pan 1 1 2 -30    # pattern 1, row 1, channel 2: left of centre
+pan 1 1-4 2 30   # a whole span leaning right
+pan 1 1 2 0      # and back to the channel's own place
+```
+
+This is the field a stereo recording actually needs: a hat and a snare come off
+the **same channel** and belong in different places, which no channel-level pan
+can say. A hit that never pans builds **no extra audio node at all**, so a song
+that does not use this carries exactly the graph it always did.
+
+A song holding a panned hit writes **file version 54**: an older build would play
+it dead centre — not a refusal and not silence, but a stereo picture that quietly
+went mono, which is the kind of loss you only notice on headphones.
+
+### `seek PATTERN ROW TRACK PERCENT` — where in its sample a hit begins
+
+A percentage of the **window the note already plays**, so a chopped break seeks
+inside its piece rather than into the one next door:
+
+```
+seek 1 1 2 25    # pattern 1, row 1, channel 2: begin a quarter of the way in
+seek 1 1-8 2 25  # rows 1-8: a chop point across a whole bar
+seek 1 1 2 0     # and from the start again
+```
+
+Why a percentage rather than seconds: a quarter is a quarter of any file, so a
+trimmed sample and a whole one agree about where the quarter is — the same reason
+notes are pitched in semitones rather than hertz. It is what turns a long
+recording into several sounds without cutting it up: the same file played from
+four different points is four instruments.
+
+`0` to **95** percent. Past that, what is left of the sample is a click rather
+than an attack. A song holding a seek writes **file version 53**, a rung of its
+own, because an older build would play the attack the file said to skip — a
+different sound rather than a plainer one.
+
+### `push PATTERN ROW TRACK TICKS` — a hit that lands behind its step
+
+A tick is a **sixth of a step**, and a hit can be up to **3** of them behind its
+own step:
+
+```
+push 1 1 2 2    # pattern 1, row 1, channel 2: two ticks late
+push 1 1-4 2 2  # rows 1-4 of channel 2: a whole snare row leaning back
+push 1 1 2 0    # and back on the step
+```
+
+Four numbers because a cell is named by **where it is** — there is no current row
+in a script, and inventing one would make a push depend on the line above it.
+Rows count from **1** here, the way the grid numbers them.
+
+The push is stored on the **cell**, not on the note, so re-pitching or re-velocitising
+the step keeps it. It is measured in ticks of a *step* rather than in milliseconds,
+so it leans the same amount at any tempo. Three ticks is a third of a step: past
+that a hit is closer to the next step than its own, and a beat that far behind the
+grid belongs on the step it actually sounds on.
+
+A song holding a pushed cell writes **file version 52** — an older build refuses
+the cell rather than playing it straight, because a groove written behind the beat
+is a decision, not an accident.
+
+### `zone TRACK NOTE SAMPLE` / `zone TRACK clear` — which recording plays where
+
+```
+track 1 "PIANO" wave sample sample PIANO_LOW
+track 1 sample PIANO_LOW      # the floor under the map
+zone 1 C-2 PIANO_LOW          # from C-2 upward: the low octaves
+zone 1 C-4 PIANO_HI           # from C-4 upward: the high ones
+zone 1 C-6 PIANO_TOP          # and the top
+```
+
+A channel names ONE recording and every note is that file transposed from middle C
+— which is what makes a whole piano stretched across seven octaves sound slow at
+the bottom and thin at the top. A **keymap** says otherwise: from a note upward,
+play THAT recording instead. Each line is one **boundary**, not a range, so the
+zones cannot disagree about who owns a note or leave a hole, and two lines written
+in either order mean the same keyboard.
+
+**The lowest zone owns everything below it.** A map covers the keyboard or it is
+not a map — otherwise a keymap would silently mute the bottom octaves. The
+channel's own `sample` is the floor UNDER the map rather than under its notes: it
+plays when there is no map at all, and when the zone a note lands in names a file
+this machine does not have. So a missing recording is still a missing flavour and
+never a missing note.
+
+**`zone 1 clear` empties the map**, which is the channel this app has always had.
+A note is written as a name (`C-4`) or a number (`60`), and the boundary is
+clamped to the keyboard.
+
 ### `sample load PATH` / `sample import` — bring one of YOUR recordings in
 
 ```
@@ -1725,7 +1980,8 @@ This is one of the settings a script can change that are **not part of the
 song** — a song is notes and structure, so the level travels beside it (in the
 apply result's `settings`) rather than inside it. A script that says nothing about
 volume leaves your current level alone. Undo does not restore it, because undo
-restores the song. The other six are [`octave`](#octave-n--the-octave-you-are-playing-in),
+restores the song. The other seven are [`octave`](#octave-n--the-octave-you-are-playing-in),
+[`advance`](#advance-n--how-far-the-cursor-walks-after-a-note),
 [`theme`](#theme-name--the-look-of-the-app), [`page`](#page-name--which-screen-is-showing),
 [`solo`](#solo-n--hear-only-these-channels),
 [`chords`](#chords-off--triad--7th--what-one-key-writes)
@@ -1748,6 +2004,32 @@ written in, which is what makes a compact grid block readable; and it is the oct
 the APP is left on, so the piano's `OCT` control and the script agree about where
 you are playing. The last `octave` line in a script wins — a script may walk the
 whole keyboard as it writes, and the app ends up where the writing ended.
+
+### `advance N` — how far the cursor walks after a note
+
+```
+advance 2       # write a note, move two rows down: every other step
+advance 0       # stay here: the next note lands in the SAME step
+advance 1       # the default, one row per note
+```
+
+One whole number, 0–8. It is the EDIT STEP, the setting every tracker has and few
+namers mention: after a note is written, the cursor moves down by this many rows,
+so a melody is one key per note while a kick on every other step, a hat on every
+fourth or a 32nd roll is one key per HIT rather than one key and two arrow
+presses.
+
+`0` is the interesting value. It keeps the cursor on the row, so the next note
+joins the one just written — not into one cell (a cell's chord is a comma spelling,
+`C-4,E-4,G-4`) but into the steps beside it, which is how a flam, a drum fill or
+the four lanes of a chord are typed without moving. `1` is the default, and a
+script that never says `advance` gets it.
+
+A **session** setting, like [`octave`](#octave-n--the-octave-you-are-playing-in)
+and [`solo`](#solo-n-n--hear-only-these-channels): it says how you are TYPING
+rather than what the song is, so it lives beside the song instead of in it, no
+file carries it, and it costs no undo step. On the grid the same setting is on
+`,` and `.` — a press each, with the value in a toast.
 
 ### `solo N N…` — hear only these channels
 
@@ -1794,10 +2076,10 @@ The `HEAR NOTES AS I MOVE` toggle in `THIS CELL`, and another setting that is no
 part of the song. An agent cannot hear anything, so this is a line for the
 person it is writing FOR: `hear on` makes the grid playable by ear immediately.
 
-### `export` — the bars an export renders, and how loud it arrives
+### `export` — the bars playback loops and an export renders, and how loud it arrives
 
 ```
-export bars 8 to 15      # EXPORT AUDIO / STEMS / MIDI write these bars only
+export bars 8 to 15      # PLAY loops these bars; EXPORT AUDIO / STEMS / MIDI write only them
 export all               # and this puts the whole song back (the default)
 export loud -14          # normalise audio exports to -14 LUFS (what streaming uses)
 export loud off          # and this hands the level back to the master fader (the default)
@@ -1812,6 +2094,13 @@ the target and leaves the region exactly as an earlier line left it.
 The **loop region** is two numbers counted from 1 — the same bars the `F3` list
 numbers — and `bars A to B` is the clause an `automate` line already uses, so a
 range in this language reads the same wherever it appears.
+
+It does two things, and doing both is the point: the export renders those bars,
+and the TRANSPORT loops them — press play with a region marked and the app plays
+bar 8, 9, … 15, then bar 8 again, so the bars you are fixing are the bars you are
+hearing. Press play with none marked and the whole song loops, exactly as it did
+before regions existed. `L` in `F3` is the same setting with a mouse, and its
+status line says which of the two you are in.
 
 The **loudness target** is a number in **LUFS**, the unit every streaming service
 publishes, or the word `off`. See its own section below.
@@ -1971,6 +2260,32 @@ can change is a script you chose to paste.
 
 Like the other session settings, a script that never mentions a theme leaves the
 one you picked alone, and the last `theme` line wins if a script says it twice.
+
+### `pack save` — the song that arrives whole
+
+```
+pack save       # one file: the song, its samples, the plugin versions it pins
+```
+
+One statement, one word after it. It writes the same bundle the FILE menu's
+**SAVE BUNDLE** writes, and it exists because of who writes songs here: an agent
+can build a beautiful tune with a chopped break and hand over a `.txt` that plays
+**silence**, because a sample is app state and a script only names it. `pack save`
+is the one line that makes the handover work.
+
+What is in it: the song's JSON exactly as a save writes it, every sample the song
+name-checks as a `.wav`, and every third-party plugin's manifest plus source. What
+is not: the built-in voices, which every build carries, and any sample or plugin
+that is not on this machine — those travel by name, and the file menu's report says
+which.
+
+There is no `pack load`. A script names a file something would have to FIND, and a
+path in a browser is not a path: opening a pack is a click, and OPEN FILE already
+takes one.
+
+A **side effect** rather than a setting: the file lands in the browser's
+downloads, nothing is stored, and a script that never says `pack` never writes a
+file. Which is also why it is the last thing an apply does.
 
 ### `page NAME` — which screen is showing
 
@@ -2145,8 +2460,22 @@ takes effect on the next note rather than cutting the one that is ringing.
 tracks 6
 ```
 
-One whole number, 1–8. Growing the song adds channels with the default names
-(`TRACK 5`, `TRACK 6`) and default waveforms; shrinking it drops the last ones.
+**One pattern's own length** is the same word with a scope: `steps 32 pattern 3`
+gives pattern 3 a thirty-two-step grid and leaves the rest as they are, which is
+how a sixteen-step verse and a thirty-two-step chorus live in one song. The grid,
+the piano roll and the MIDI export each read a pattern's own row count; the song's
+`steps` is the length of pattern 1, and of any pattern that never names one. A
+song whose patterns differ saves as file version 58.
+
+One whole number, 1–16 — two banks of eight. Growing the song adds channels with
+the default names (`TRACK 5`, `TRACK 6`) and default waveforms; shrinking it
+drops the last ones.
+
+The tracker shows one **bank** of eight channels at a time, so cells keep the
+width they always had: moving the cursor to channel 9 brings the second bank on
+screen by itself. A song with more than eight channels saves as file version 57,
+because a build that says `73` reads the ninth channel and then saves it back
+away.
 
 **Put this before any line that depends on it.** A `track 5` statement, or a
 grid row with five columns, is an error while the song still has four channels.
@@ -3241,7 +3570,7 @@ pattern 2 "CHORUS"
 pattern 9
 ```
 
-One whole number, 1–64. Patterns that do not exist yet are **created** (along
+One whole number, 1–128. Patterns that do not exist yet are **created** (along
 with any skipped over, which come out empty and named `PATTERN n`).
 
 This statement does two things: it sets which pattern grid rows and `note` /
@@ -3266,7 +3595,7 @@ arrangement.
 - Each number is a pattern, **1-based**, exactly as `pattern N` addresses them.
 - A pattern the song does not have yet is **created**, so `order 1 2 1` on a fresh
   song is a working three-bar song with bar two waiting to be written.
-- Up to 64 bars. The order then **loops**: after the last bar the song starts
+- Up to 256 bars. The order then **loops**: after the last bar the song starts
   again.
 - An unusable value is an error — a wrong order plays the wrong music, and a
   played-wrong song is exactly the mistake a text notation exists to prevent.
@@ -3469,6 +3798,10 @@ rather than have to be re-derived from a line they have to keep.
   `gate 100` a written run is byte for byte the run the modifier writes.
 - **`arp mode chord` | `source`** — which chord a run walks: `chord` the one named
   on a `write`, `source` the song's own loop. A stored setting, so it round-trips.
+- **`arp write ROW TRACK *`** — the same run, from the chord already written in
+  that cell. Write a triad, then ask for the arp, and what you can see is what
+  expands; the chord is not spelled twice, so it cannot drift from the grid. An
+  empty or stopped cell has nothing to run, so the line does nothing there.
 - **`arp write ROW TRACK CHORD`** — commit the run those dials describe, into the
   pattern `pattern` selected, exactly as `chord ROW TRACK CHORD arp …` would for
   the matching direction and octaves. **The cells are the same cells**: one
@@ -3564,11 +3897,14 @@ wind 44 — so the grid, the note count, the file and an export need no special
 case for it. See **§2** for what a drum cell is, and the export table in
 [`09-song-files.md`](09-song-files.md) for what a kit channel becomes in MIDI.
 
-### `rows A to B …` — a run of steps, and the four things a run can do
+### `rows A to B …` — a run of steps, and the seven things a run can do
 
 ```text
 rows 0 to 3 octave up       # rows 0-3, an octave higher
 rows 4 to 7 octave down 2   # the next four rows, two octaves lower
+rows 0 to 7 transpose -5    # the whole run down a fourth — semitones, not octaves
+rows 0 to 15 fill           # keep the note at row 0 playing down every empty step
+rows 0 to 7 interpolate     # write the steps between the first and last note
 rows 0 to 3 repeat 4        # that four-row figure, four times in all
 rows 0 to 7 roll            # every hit in rows 0-7, four hits inside its step
 rows 0 to 3 reverse         # those four steps, read backwards
@@ -3577,8 +3913,9 @@ rows 0 to 3 reverse         # those four steps, read backwards
 The one statement in this language that names a RUN of steps rather than one
 place: a `note` names a row, a `chord` names a row, a `track` names a channel,
 and this names a stretch of time. It acts on the pattern `pattern` selected, the
-way `note` and `erase` do, and there are exactly four things to do with a range —
-move it, play it again, roll it, or read it backwards.
+way `note` and `erase` do, and there are seven things to do with a range — move
+it by octaves or by semitones, fill it, slide between its ends, play it again,
+roll it, or read it backwards.
 
 - **`A to B`** — the range, both ends included, written the way an `automate` lane
   writes its bars (`bars 8 to 15`). **Rows count from 0**, so `0 to 3` is the first
@@ -3591,6 +3928,25 @@ move it, play it again, roll it, or read it backwards.
   is **clamped** into it rather than refused, the same rule the chord tool follows
   — the range is the guarantee, and an octave too many is a run that arrived at
   the edge. Empty steps are left exactly as they are.
+- **`transpose N`** — moves every note by **semitones**, and the sign says which
+  way: `rows 0 to 7 transpose 2` is up a whole tone, `-5` down a fourth. The number
+  is a whole number −48…48 and **may not be 0** — a range moved by nothing is the
+  range as it is. It is the octave shift at the size music is actually written in
+  (an octave *is* twelve of these, and the two share one function), so it clamps at
+  `C-0..B-8`, leaves drums where they are, and moves a chord whole.
+- **`fill`** — keeps the range **playing what was already sounding**, down its
+  empty steps. Per channel the seed is the step just before the range when it
+  holds a note, so `rows 4 to 15 fill` extends the note written on step 3; a
+  channel whose first note is inside the range seeds from there. A step that
+  already sounds is never overwritten, a `off`/`cut` stop is neither filled over
+  nor carried past (it ends the run it sits in), and a channel with nothing to
+  carry simply stays empty.
+- **`interpolate`** — writes the empty steps **between the range’s notes**, evenly:
+  `C-4` on row 0 and `G-4` on row 4 becomes 0, 2, 3, 5, 7 semitones rather than a
+  jump — a riser, a fall, or the slide a channel’s `glide` would make over eight
+  steps instead of one. A chord anchors from its first note and the steps between
+  are single notes. A drum channel is skipped, a stop is left where it is, and a
+  range with fewer than two notes draws no line: silence, not a guess.
 - **`repeat N`** — plays the range again **from where it starts**, `N` times **in
   all**: `rows 0 to 3 repeat 4` writes rows 0–3 and then three more copies of them,
   filling rows 0–15. The count must be 2 or more (`repeat 1` is the range on its
@@ -3715,7 +4071,7 @@ script that describes the whole thing again (start with `new`).
 | --- | --- | --- | --- |
 | Tempo | 40–300 BPM | 120 | `tempo` |
 | Channels | 1–8 | 4 | `tracks` |
-| Patterns | 1–64 | 1 | `pattern`, `copy` |
+| Patterns | 1–128 | 1 | `pattern`, `copy` |
 | Steps per pattern | 1–512 | **16** | `steps` |
 | Steps per beat (grid resolution) | 1–16 | 4 | `beat`, or the same bar in note values with `grid`/`meter` |
 | Swing (the song's lilt) | 0–100 % | **0** (straight) | `swing` |
@@ -3845,6 +4201,7 @@ its reason.
 | One channel's own pocket — a feel that belongs to the PART rather than the song | `track 4 "HAT" groove shuffle humanize 40` |
 | Which four patches the drums play — one word for a whole drum set | `kit 808` |
 | How many notes a channel holds at once — held notes ring through each other | `track 5 "PAD" hold 16 poly 4` |
+| A note that stops before its hold runs out — no screen control, because a stop is a cell | `off` releases the channel on that step and `cut` chokes it: `C-4 . off .` |
 | What kind of filter the `BRIGHT` knob opens — a low-pass, a high-pass, a vowel or a scoop | `track 2 "STAB" shape sharp` |
 | A group fader over several channels — the kit, the pads, the backing (no screen yet: the script and the file are where a group lives) | `bus DRUMS 70`, joined by `track 1 bus DRUMS` |
 | The pattern's length (and how many rows fit) | `steps 32` |
@@ -3905,7 +4262,7 @@ master level, is the only one a FILE carries:
 | An instrument to fetch and load — a soundfont or a Noislet pack | `instrument load "storage/soundfonts/dkc/font.sf2"` | no — an instrument is not a song, however it arrives |
 | A request for the sample picker | `sample import` | no — it needs a person at a file dialog |
 | A recording to fetch and load — a `.wav` of yours | `sample load "samples/break.wav"` | no — the audio is the app's, and the song holds only its name |
-| The bars an export renders (the loop region) | `export bars 8 to 15` / `export all` | no — a region is what you are DOING with a song, not what the song is |
+| The bars playback loops and an export renders (the loop region) | `export bars 8 to 15` / `export all` | no — a region is what you are DOING with a song, not what the song is |
 | The loudness audio exports normalise to | `export loud -14` / `export loud off` | no — a level is what you are doing with the song, not what it is |
 
 Each is optional and independent: a script that never mentions one leaves the

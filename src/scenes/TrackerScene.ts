@@ -146,6 +146,7 @@ import {
   bounceLabel,
   bounceMarkFor,
   bounceMarkStatus,
+  bounceSteps,
   fitBounce,
   markBounce,
   markedBounce,
@@ -196,6 +197,9 @@ import {
   type MidiMode,
   type MidiStatus,
   userKitFromName,
+  parseUserKits,
+  shareLink,
+  shareSongFromUrl,
   withUserKit,
   MAX_USER_KITS,
   type UserKit,
@@ -243,6 +247,7 @@ import {
   sceneNameProblem,
   sceneStepNotes,
   stepNotes,
+  stepStops,
   tidySceneName,
   withCue,
   withSceneClip,
@@ -355,6 +360,19 @@ import {
   type VoiceParamId,
   type VoiceParams,
   type Wave,
+  advanceByStep,
+  blockDiffers,
+  clampEditStep,
+  clearBlock,
+  MAX_EDIT_STEP,
+  copyBlock,
+  pasteBlock,
+  selectAll,
+  selectionBlock,
+  selectionRows,
+  selectionTracks,
+  type Cell,
+  type Selection,
 } from '../model';
 import { loadVoiceLibrary, saveVoiceLibrary } from '../voiceLibrary';
 import { loadKitLibrary, saveKitLibrary } from '../kitLibrary';
@@ -627,7 +645,32 @@ export class TrackerScene extends Phaser.Scene {
   private song: Song = createSong();
   private patternIndex = 0;
   private cursor: Cursor = { row: 0, track: 0 };
+  /**
+   * The block the mouse or `Ctrl+A` has selected, or null.
+   *
+   * A selection is a REGION with two corners and no mode: nothing is disabled
+   * while it exists, the cursor still moves, and a note still types. It is held
+   * here rather than on the grid because the grid is a view — it draws the block
+   * it is handed and would happily draw one the app does not have.
+   */
+  private selection: Selection | null = null;
+  /**
+   * What `Ctrl+C` took, as rows of cells. A plain block rather than a serialised
+   * string, because the only reader of it is the paste two keystrokes later: it
+   * keeps chord widths, stops and drums without a format, and it survives moving
+   * between patterns, which is what a clipboard is FOR here.
+   */
+  private clipboard: Cell[][] | null = null;
   private octave = 4;
+  /**
+   * How many rows the cursor moves after a note is written, 0..8.
+   *
+   * A SESSION setting, like the octave: it says how you are TYPING rather than
+   * what the song is, so it lives here beside `octave` and never in the file. The
+   * two are the pair a tracker hand sets once — where the keyboard plays, and how
+   * far it walks — and `,`/`.` move this one the way `-`/`=` move the other.
+   */
+  private editStep = 1;
   private volume = 0.7;
   /** Whether the working session has changed since it was last written out. */
   private sessionDirty = false;
@@ -1072,6 +1115,22 @@ export class TrackerScene extends Phaser.Scene {
     const launch = readLaunch(window.location.search, KIT_LAUNCHER);
     this.kitExit = launch ? new HostExitPrompt(this, launch) : null;
 
+    // A link that carries a song OPENS it. Read from the fragment, which no web
+    // server ever receives, so sharing a song uploads nothing and the link works
+    // from a copy of the app on a file:// path too. A link without one changes
+    // nothing, and a link that will not parse says so rather than opening a
+    // different song and leaving the person to wonder which they got.
+    const shared = shareSongFromUrl(window.location.hash);
+    if (shared.ok) {
+      const opened = applyScript(this.song, shared.script);
+      if (opened.ok) {
+        this.song = opened.song;
+        this.toast.show('OPENED FROM THE LINK', activeColors().ward);
+      } else {
+        this.toast.show('THAT LINK WOULD NOT OPEN  ·  THE SONG HERE IS UNTOUCHED', activeColors().danger);
+      }
+    }
+
     this.syncAll();
     this.updateHistoryButtons();
 
@@ -1225,8 +1284,15 @@ export class TrackerScene extends Phaser.Scene {
       this.patternPanel.body,
       this.currentPattern,
       {
-        onPick: (row, track) => this.setSelection({ row, track }),
+        onPick: (row, track) => {
+          // A plain click is one cell again: a block that survived every click
+          // would be a block you could not get out of, and the cursor has just
+          // been put somewhere else anyway.
+          this.clearSelectionBlock();
+          this.setSelection({ row, track });
+        },
         onSecondaryPick: (row, track) => this.clearCellAt({ row, track }),
+        onDragSelect: (anchor, head) => this.selectBlock(anchor, head),
         onLane: (row, lane) => this.writeLane(row, lane),
         onSecondaryLane: (row, lane) => this.clearLane(row, lane),
         onOverview: (row) => this.setSelection({ row, track: this.cursor.track }),
@@ -1548,6 +1614,7 @@ export class TrackerScene extends Phaser.Scene {
       useInstrument: (id) => this.useInstrumentAction(id),
       removeInstrument: (id) => this.removeInstrumentAction(id),
       scriptText: () => songToScript(this.song, { volume: this.volume }),
+      shareLink: () => this.shareLinkStatus(),
       jsonText: () => songToJson(this.song, { volume: this.volume }, this.songPluginVersions()),
       fileStem: () => songFileStem(this.song.title),
       bounceLabel: () => bounceLabel(this.bounceRange(), this.song.order.length),
@@ -2321,6 +2388,12 @@ export class TrackerScene extends Phaser.Scene {
         songJson: songToJson(this.song, { volume: this.volume }, this.songPluginVersions()),
         plugins,
         samples,
+        // The kit the song NAMES, when it is one of yours: a bundle that carried
+        // the name but not the drums arrived with somebody else's kit and no
+        // mention of it.
+        kits: this.savedKits
+          .filter((kit) => kit.name === this.song.kit)
+          .map((kit) => ({ name: kit.name, json: kit })),
       }),
       details,
     };
@@ -2332,6 +2405,48 @@ export class TrackerScene extends Phaser.Scene {
    * falls back. One undo step for the song; the installs beside it are app
    * state like every install, and each says what it did in the report.
    */
+  /**
+   * `pack save`, from a script: the FILE menu's SAVE BUNDLE, run for you.
+   *
+   * The same builder and the same download, because a pack an agent wrote and a
+   * pack a click wrote have to be the same bytes — a second writer would be a
+   * second format to keep in step. The report is one toast rather than a panel:
+   * a script has already said what it did, and the useful half here is the file
+   * name, which is where the samples went.
+   */
+  private savePack(): void {
+    const out = this.exportSongBundle();
+    if ('error' in out) {
+      this.toast.show(`NOTHING TO PACK  \u00b7  ${out.error}`, activeColors().danger);
+      return;
+    }
+    downloadBytes(out.fileName, 'application/zip', out.bytes);
+    this.toast.show(`PACKED  ${out.fileName}`, activeColors().ward);
+  }
+
+  /**
+   * SHARE AS LINK: the song as a URL, copied to the clipboard.
+   *
+   * The page is the one this app is open on, WITHOUT its fragment — a link made
+   * from a song that was itself opened by a link has to carry the song in front of
+   * it, not both songs at once. The model decides whether it fits; this only says
+   * what happened, in the words the menu shows.
+   */
+  private shareLinkStatus(): FileActionResult {
+    const page = window.location.href.split('#')[0] ?? '';
+    const made = shareLink(this.song, page);
+    if (!made.ok) {
+      return { status: 'TOO LONG FOR A LINK', details: [made.reason], tone: 'error' };
+    }
+    const copied = typeof navigator !== 'undefined' && navigator.clipboard?.writeText !== undefined;
+    if (copied) navigator.clipboard.writeText(made.url).catch(() => undefined);
+    return {
+      status: copied ? `LINK COPIED  ·  ${made.characters} CHARACTERS` : `LINK IS ${made.characters} CHARACTERS  ·  COPY FROM THE ADDRESS BAR`,
+      details: [made.url],
+      tone: 'ok',
+    };
+  }
+
   private async openBundleAction(name: string, bytes: ArrayBuffer): Promise<FileActionResult> {
     const parsed = parseSongBundle(new Uint8Array(bytes));
     if (!parsed.ok) {
@@ -2363,6 +2478,25 @@ export class TrackerScene extends Phaser.Scene {
     for (const sample of parsed.bundle.samples) {
       const result = this.openSampleAction(sample.name, sample.wavBytes.slice().buffer);
       if (result.tone === 'error') report.push(`${sample.name}: ${result.status}`);
+    }
+    // The kits the bundle carried, seated before the song opens so the song
+    // lands on the drums it names rather than the fallback. The library is told
+    // as well, so the kit is still there after this song is closed.
+    if (parsed.bundle.kits.length > 0) {
+      for (const kit of parsed.bundle.kits) {
+        const already = this.savedKits.some((entry) => entry.name === kit.name);
+        // Through the model's own validating reader, so a kit from a bundle is
+        // held to exactly the rules a kit from the library is.
+        const good = parseUserKits([kit.json])[0] ?? null;
+        if (good === null) {
+          report.push(`"${kit.name}" is not a kit this build reads; the drums fall back.`);
+          continue;
+        }
+        this.savedKits = withUserKit(this.savedKits, good);
+        report.push(`"${kit.name}" arrived${already ? ' (replacing the one here)' : ''}.`);
+      }
+      saveKitLibrary(this.savedKits);
+      this.engine.setKit(this.song.kit, this.savedKits);
     }
     const opened = this.openFileAction(`${name} / song.json`, parsed.bundle.songJson);
     return { ...opened, details: [...report, ...(opened.details ?? [])] };
@@ -3217,7 +3351,17 @@ export class TrackerScene extends Phaser.Scene {
       this.samples,
       this.song.tracks.map((track) => track.sample),
       this.song.machine?.pads.map((pad) => pad.sample) ?? [],
+      // Each channel's KEYMAP, handed over with the names it is written in: a zone
+      // names a recording the channel's own `sample` does not, so the engine needs
+      // the map itself to answer "what does this note play".
+      this.song.tracks.map((track) => track.zones ?? []),
+      // And each channel's SLICES, so a chopped break plays its pieces.
+      this.song.tracks.map((track) => track.slices ?? []),
     );
+    // A table is sound rather than audio data, so it travels on its own call — and
+    // it rides along here so every path that restates a channel's samples also
+    // restates the spectrum it wears.
+    this.engine.setTables(this.song.tracks.map((track) => track.table?.harmonics ?? null));
     this.engine.setTakes(this.takes);
   }
 
@@ -4212,6 +4356,10 @@ export class TrackerScene extends Phaser.Scene {
    */
   private syncAll(): void {
     this.sessionDirty = true;
+    // A structural change (another pattern, a shorter one, an undo) can leave a
+    // block pointing at cells that are no longer there, so it goes rather than
+    // being clamped into something nobody selected.
+    this.clearSelectionBlock();
     this.syncAudioGraph();
     this.cursor = clampCursor(this.cursor, this.currentPattern, this.trackCount);
     this.grid.setRowsPerBeat(this.song.rowsPerBeat);
@@ -4699,6 +4847,10 @@ export class TrackerScene extends Phaser.Scene {
       chordDegrees: this.chordDegrees,
       hearNotes: this.previewOnMove,
     };
+    // Only when it says something: one row is the default every session starts
+    // from, and writing it down would make every restore announce a setting
+    // nobody touched.
+    if (this.editStep !== 1) settings.advance = this.editStep;
     const bounce = this.bounceRange();
     if (bounce !== null) settings.bounce = bounce;
     if (this.loudness !== null) settings.loud = this.loudness;
@@ -4955,10 +5107,132 @@ export class TrackerScene extends Phaser.Scene {
   }
 
   private moveSelection(dRow: number, dTrack: number): void {
+    // Arrowing away lets the block go. Keeping it while the cursor walks would
+    // make a selection you cannot escape without Escape, and every tracker that
+    // does that gets the same complaint.
+    this.clearSelectionBlock();
     this.setSelection(moveCursor(this.cursor, dRow, dTrack, this.currentPattern, this.trackCount));
   }
 
+  // --- the selected block ----------------------------------------------------
+
+  /**
+   * Select the block between two corners — a drag, or the ends of `Ctrl+A`.
+   *
+   * One cell is not a block: a drag that has not left the cell it started on
+   * leaves the grid in its ordinary state, so the highlight only appears once
+   * there is a region to show.
+   */
+  private selectBlock(anchor: Cursor, head: Cursor): void {
+    const pattern = this.currentPattern;
+    const next: Selection = {
+      anchor: clampCursor(anchor, pattern, this.trackCount),
+      head: clampCursor(head, pattern, this.trackCount),
+    };
+    const rows = selectionRows(next);
+    const tracks = selectionTracks(next);
+    if (rows <= 1 && tracks <= 1) {
+      this.clearSelectionBlock();
+      return;
+    }
+    const previous = this.selection;
+    this.selection = next;
+    this.grid.setSelection(selectionBlock(next));
+    // The size is said out loud while the hand is still moving, because a
+    // highlight tells you WHERE the block is and not how big it is — and "did I
+    // get the whole bar" is the question a drag is answered by.
+    if (
+      !previous
+      || selectionRows(previous) !== rows
+      || selectionTracks(previous) !== tracks
+    ) {
+      this.toast.show(`${rows} ROWS \u00d7 ${tracks} TRACKS`, activeColors().ward);
+    }
+  }
+
+  private clearSelectionBlock(): void {
+    if (!this.selection) return;
+    this.selection = null;
+    this.grid.setSelection(null);
+  }
+
+  /** `Ctrl+A`: the whole pattern, which is the block a bar-wide edit starts from. */
+  private selectWholePattern(): void {
+    const next = selectAll(this.currentPattern, this.trackCount);
+    this.selection = next;
+    this.grid.setSelection(selectionBlock(next));
+    this.toast.show(
+      `ALL ${selectionRows(next)} ROWS \u00d7 ${selectionTracks(next)} TRACKS  \u00b7  CTRL+C, CTRL+X, CTRL+V`,
+      activeColors().ward,
+    );
+  }
+
+  /**
+   * `Ctrl+C` / `Ctrl+X`. With no block, the cell under the cursor — one cell is
+   * the smallest selection there is, and a copy that refused to work until you
+   * had dragged one out would be a copy nobody trusts.
+   */
+  private copySelection(cut: boolean): void {
+    const pattern = this.currentPattern;
+    const region: Selection = this.selection ?? {
+      anchor: { ...this.cursor },
+      head: { ...this.cursor },
+    };
+    const cells = copyBlock(pattern, region);
+    if (cells.length === 0 || cells[0].length === 0) return;
+    this.clipboard = cells;
+    const rows = cells.length;
+    const tracks = cells[0].length;
+    let cleared = 0;
+    if (cut) {
+      this.record();
+      cleared = clearBlock(pattern, region);
+      this.grid.render();
+      this.afterEdit();
+    }
+    const size = rows === 1 && tracks === 1 ? '1 CELL' : `${rows} \u00d7 ${tracks}`;
+    this.toast.show(
+      cut
+        ? (cleared === 0 ? `CUT ${size}  \u00b7  NOTHING THERE` : `CUT ${size}`)
+        : `COPIED ${size}`,
+      activeColors().ward,
+    );
+  }
+
+  /** `Ctrl+V`: the clipboard's top-left goes on the cursor, clipped at the edges. */
+  private pasteSelection(): void {
+    const clip = this.clipboard;
+    if (!clip) {
+      this.toast.show('CLIPBOARD IS EMPTY  \u00b7  CTRL+C FIRST', activeColors().textDim);
+      return;
+    }
+    const pattern = this.currentPattern;
+    if (!blockDiffers(pattern, this.cursor, clip)) {
+      this.toast.show('PASTED NOTHING  \u00b7  ALREADY THE SAME HERE', activeColors().textDim);
+      return;
+    }
+    this.record();
+    const written = pasteBlock(pattern, this.cursor, clip);
+    this.grid.render();
+    this.afterEdit();
+    // The block lands SELECTED, so it is obvious what arrived and it can be moved
+    // again with the arrows or copied on from where it now sits.
+    this.selectBlock(
+      { ...this.cursor },
+      {
+        row: Math.min(this.cursor.row + clip.length - 1, pattern.steps.length - 1),
+        track: Math.min(this.cursor.track + clip[0].length - 1, this.trackCount - 1),
+      },
+    );
+    this.toast.show(`PASTED ${written} CELL${written === 1 ? '' : 'S'}`, activeColors().ward);
+  }
+
   private enterNote(midi: number): void {
+    // A note typed while a block is up writes ONE cell and lets the block go.
+    // Writing into the whole block is a different feature (a block edit), and a
+    // half of it — the selection surviving the note — would be the confusing
+    // half.
+    this.clearSelectionBlock();
     const pattern = this.currentPattern;
     const { row, track } = this.cursor;
     const note = clampMidi(midi);
@@ -4967,8 +5241,9 @@ export class TrackerScene extends Phaser.Scene {
     writeNote(pattern, row, track, note);
     this.refreshStep(row, track);
     this.engine.previewNote(track, note);
-    // Trackers advance after a note — typing a melody is one key per note.
-    this.setSelection({ row: Math.min(row + 1, pattern.steps.length - 1), track }, false);
+    // Trackers advance after a note — typing a melody is one key per note — and
+    // how far is the edit step, so `,`/`.` turns that into one key per BAR.
+    this.setSelection(advanceByStep({ row, track }, this.editStep, pattern, this.trackCount), false);
     this.afterEdit();
   }
 
@@ -5051,6 +5326,7 @@ export class TrackerScene extends Phaser.Scene {
    * step is what a chord has always been in this kind of music.
    */
   private enterChord(midi: number): void {
+    this.clearSelectionBlock();
     const pattern = this.currentPattern;
     const { row, track } = this.cursor;
     const notes = diatonicChord(clampMidi(midi), this.song.key, this.chordDegrees);
@@ -5069,9 +5345,9 @@ export class TrackerScene extends Phaser.Scene {
       // Every note is auditioned, because the point of the gesture is hearing the
       // chord the channel can now hold.
       for (const note of notes) this.engine.previewNote(track, note);
-      // One key per step, exactly as a single note: the cursor still advances one
-      // row and stays on the channel the chord was rooted on.
-      this.setSelection({ row: Math.min(row + 1, pattern.steps.length - 1), track }, false);
+      // One key per step, exactly as a single note: the cursor advances by the
+      // edit step and stays on the channel the chord was rooted on.
+      this.setSelection(advanceByStep({ row, track }, this.editStep, pattern, this.trackCount), false);
       this.afterEdit();
       const label = chordName(notes);
       this.toast.show(`${label === '' ? describeChord(notes) : label}  \u00b7  ONE CELL`, activeColors().ward);
@@ -5091,9 +5367,9 @@ export class TrackerScene extends Phaser.Scene {
       this.refreshStep(row, track + i);
       this.engine.previewNote(track + i, note);
     });
-    // Like a single note, a chord advances the row and stays on its root channel,
-    // so playing chords is one key per step and the next one lands under it.
-    this.setSelection({ row: Math.min(row + 1, pattern.steps.length - 1), track }, false);
+    // Like a single note, a chord advances by the edit step and stays on its root
+    // channel, so playing chords is one key per step and the next lands under it.
+    this.setSelection(advanceByStep({ row, track }, this.editStep, pattern, this.trackCount), false);
     this.afterEdit();
     // Name the chord when it has a name; otherwise list what was written, so the
     // toast never comes up empty.
@@ -6094,6 +6370,18 @@ export class TrackerScene extends Phaser.Scene {
     this.engine.setSwing(next);
   }
 
+  private setEditStep(step: number): void {
+    const next = clampEditStep(step);
+    const said = next === 0 ? 'STAY ON THE ROW' : next === 1 ? 'ONE ROW' : `${next} ROWS`;
+    // A toast even when nothing moved, because at 0 or at 8 the press has to say
+    // why it did nothing — a key that goes quiet reads as a bug.
+    if (next !== this.editStep) this.editStep = next;
+    this.toast.show(
+      `EDIT STEP  ${said}${next === MAX_EDIT_STEP ? '  \u00b7  MAX' : ''}`,
+      activeColors().ward,
+    );
+  }
+
   private setOctave(octave: number): void {
     const next = Math.max(OCTAVE_MIN, Math.min(OCTAVE_MAX, octave));
     if (next === this.octave) return;
@@ -6331,6 +6619,11 @@ export class TrackerScene extends Phaser.Scene {
       this.previewOnMove = settings.hearNotes;
       this.hearToggle.setValue(this.previewOnMove, true);
     }
+    if (settings.advance !== undefined) this.editStep = clampEditStep(settings.advance);
+    // Last, so a script that packed says so after everything it changed is on
+    // screen — and only when it asked: a flag that defaulted to true would make
+    // every apply write a file nobody wanted.
+    if (settings.packSave) this.savePack();
     if (settings.bounce !== undefined || settings.loud !== undefined) {
       // What an export will DO, as session state: the region as a mark, so the F3
       // list draws its markers without knowing how the region got there, and the
@@ -7632,8 +7925,18 @@ export class TrackerScene extends Phaser.Scene {
     // own order when nothing is performing. It is handed the forward-reading step
     // the engine keeps as well as the wrapping one, so a launch keyed to a bar
     // line several loops away still lands exactly once.
-    this.engine.start(songSteps(this.song), (step, abs) =>
-      stepNotes(this.song, this.liveCues, step, abs ?? step),
+    this.engine.start(
+      songSteps(this.song),
+      (step, abs) => stepNotes(this.song, this.liveCues, step, abs ?? step),
+      // The stops, asked the same way and from the same step readings, so an
+      // `off` written in a scene's clip silences that channel while performing
+      // exactly as it does on the song's own order.
+      (step, abs) => stepStops(this.song, this.liveCues, step, abs ?? step),
+      // The LOOP REGION: the bars `L` marked in F3, which are also the bars the
+      // exports render. One span for both, so "only these bars" means one thing
+      // in this app — press L on two bars and you can listen to them while you
+      // fix them, then export exactly what you heard.
+      bounceSteps(this.song, this.bounceRange()),
     );
     // No toast here: the transport's own status line, the moving playhead and
     // the piano lighting up already say it.
@@ -7921,6 +8224,29 @@ export class TrackerScene extends Phaser.Scene {
         this.redo();
         return;
       }
+      // The clipboard, on the keys every program uses for it. `Ctrl+C` is read
+      // here rather than as a piano key because the piano is below this line:
+      // one chord must never write a note AND copy a bar.
+      if (e.code === 'KeyC') {
+        e.preventDefault();
+        this.copySelection(false);
+        return;
+      }
+      if (e.code === 'KeyX') {
+        e.preventDefault();
+        this.copySelection(true);
+        return;
+      }
+      if (e.code === 'KeyV') {
+        e.preventDefault();
+        this.pasteSelection();
+        return;
+      }
+      if (e.code === 'KeyA') {
+        e.preventDefault();
+        this.selectWholePattern();
+        return;
+      }
       return;
     }
     if (e.repeat) return;
@@ -7954,6 +8280,18 @@ export class TrackerScene extends Phaser.Scene {
     // How hard the note under the cursor is hit. The same pair of keys nudges a
     // knob in the F4 menu, so `[`/`]` means "the amount here" everywhere in the
     // app — and neither key is a piano note, an octave or a cursor move.
+    // How far the cursor WALKS. `,`/`.` are the keys next to the arrows and they
+    // are not piano notes, so the pair costs nothing: `,` steps less, `.` more.
+    if (e.code === 'Comma') {
+      e.preventDefault();
+      this.setEditStep(this.editStep - 1);
+      return;
+    }
+    if (e.code === 'Period') {
+      e.preventDefault();
+      this.setEditStep(this.editStep + 1);
+      return;
+    }
     if (e.code === 'BracketLeft') {
       e.preventDefault();
       this.nudgeVelocity(-1);
@@ -7993,6 +8331,13 @@ export class TrackerScene extends Phaser.Scene {
     }
     switch (edge.action) {
       case 'cancel':
+        // A block lets go before anything else does: Escape is the key that takes
+        // the highlight away, and stopping the song at the same time would be one
+        // press doing two things.
+        if (this.selection) {
+          this.clearSelectionBlock();
+          return;
+        }
         // Escape means "close what is open" — and the prompt itself is a thing
         // that is open, so it answers first. Only when nothing at all is open,
         // and only when the kit is what opened this tab, does the same key

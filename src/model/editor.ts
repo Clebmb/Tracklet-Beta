@@ -46,12 +46,44 @@ export function moveCursor(
 }
 
 /**
- * Move DOWN after writing a note, the way a tracker does — it turns typing a
- * melody into one keystroke per note. Stops at the last row rather than
- * wrapping, so a fast run never silently teleports to the top.
+ * How far the cursor may step after a note: 0 stays on the row, 8 is a whole
+ * half-bar at sixteen steps.
+ *
+ * The two ends are both real settings. `0` is how a chord or a drum fill gets
+ * written into ONE step — the note lands, the cursor does not move, the next
+ * note joins it — and `8` is how a four-on-the-floor is typed in one pass. A
+ * number outside this range is not a step anybody types.
  */
+export const MIN_EDIT_STEP = 0;
+export const MAX_EDIT_STEP = 8;
+
+/** A step the editor can actually take: a whole number in `0..8`, 1 by default. */
+export function clampEditStep(step: number): number {
+  if (!Number.isFinite(step)) return 1;
+  return Math.max(MIN_EDIT_STEP, Math.min(MAX_EDIT_STEP, Math.round(step)));
+}
+
+/**
+ * Move DOWN by the edit step after writing a note, the way a tracker does — it
+ * turns typing a melody into one keystroke per note. Stops at the last row
+ * rather than wrapping, so a fast run never silently teleports to the top.
+ */
+export function advanceByStep(
+  cursor: Cursor,
+  step: number,
+  pattern: Pattern,
+  trackCount: number,
+): Cursor {
+  return clampCursor(
+    { row: cursor.row + clampEditStep(step), track: cursor.track },
+    pattern,
+    trackCount,
+  );
+}
+
+/** One row, the step every tracker has until somebody says otherwise. */
 export function advanceAfterWrite(cursor: Cursor, pattern: Pattern, trackCount: number): Cursor {
-  return clampCursor({ row: cursor.row + 1, track: cursor.track }, pattern, trackCount);
+  return advanceByStep(cursor, 1, pattern, trackCount);
 }
 
 // --- reads ------------------------------------------------------------------

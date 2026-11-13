@@ -162,6 +162,113 @@ describe('song.edit writes lanes with automation.set and automation.clear', () =
     expect(all.song.automation).toEqual([]);
   });
 
+  it('writes a lane on the NOTE clock, whose range is steps since each hit', async () => {
+    const result = await edited(createSong(), [
+      { op: 'automation.set', track: 1, target: 'level', from: 90, to: 20, startBar: 0, endBar: 6, clock: 'note' },
+    ]);
+    expect(result.song.automation[0]).toMatchObject({ target: 'level', clock: 'note', startBar: 0, endBar: 6 });
+    // And a lane that says nothing about its clock is a bar lane, exactly as before.
+    const plain = await edited(createSong(), [
+      { op: 'automation.set', track: 1, target: 'level', from: 40, to: 90, startBar: 1, endBar: 2 },
+    ]);
+    expect(plain.song.automation[0].clock).toBeUndefined();
+  });
+
+  it('writes a channel KEYMAP through track.set, and clears it with null', async () => {
+    const result = await edited(createSong(), [
+      {
+        op: 'track.set',
+        track: 1,
+        zones: [
+          { note: 84, sample: 'HIGH' },
+          { note: 36, sample: 'LOW' },
+        ],
+      },
+    ]);
+    // Tidied the way the language tidies it: sorted, so an agent's map and a
+    // script's map are the same map.
+    expect(result.song.tracks[0].zones).toEqual([
+      { note: 36, sample: 'LOW' },
+      { note: 84, sample: 'HIGH' },
+    ]);
+
+    const cleared = await edited(result.song, [{ op: 'track.set', track: 1, zones: null }]);
+    expect(cleared.song.tracks[0].zones).toEqual([]);
+  });
+
+  it('chops a channel through track.set, in time order, and clears it with null', async () => {
+    const result = await edited(createSong(), [
+      {
+        op: 'track.set',
+        track: 1,
+        slices: [
+          { start: 0.42, end: 0.9 },
+          { start: 0, end: 0.42 },
+        ],
+      },
+    ]);
+    expect(result.song.tracks[0].slices).toEqual([
+      { start: 0, end: 0.42 },
+      { start: 0.42, end: 0.9 },
+    ]);
+    const cleared = await edited(result.song, [{ op: 'track.set', track: 1, slices: null }]);
+    expect(cleared.song.tracks[0].slices).toEqual([]);
+  });
+
+  it('gives a channel a wavetable of its own, and puts the bank back with null', async () => {
+    const result = await edited(createSong(), [
+      { op: 'track.set', track: 1, table: { name: 'ODD', harmonics: [1, 0, 0.5] } },
+    ]);
+    expect(result.song.tracks[0].table).toEqual({ name: 'ODD', harmonics: [1, 0, 0.5] });
+    const cleared = await edited(result.song, [{ op: 'track.set', track: 1, table: null }]);
+    expect(cleared.song.tracks[0].table).toBeUndefined();
+  });
+
+  it('refuses a table with no fundamental — silence with a name', async () => {
+    const error = await editError(createSong(), [
+      { op: 'track.set', track: 1, table: { name: 'SILENT', harmonics: [0, 0] } },
+    ]);
+    expect(error?.code).toBe('invalid_input');
+  });
+
+  it('refuses a slice with no end', async () => {
+    const error = await editError(createSong(), [
+      { op: 'track.set', track: 1, slices: [{ start: 0 }] },
+    ]);
+    expect(error?.code).toBe('invalid_input');
+  });
+
+  it('refuses a keymap entry that is not a note and a name', async () => {
+    const error = await editError(createSong(), [
+      { op: 'track.set', track: 1, zones: [{ note: 'C-4', sample: 'HIGH' }] },
+    ]);
+    expect(error?.code).toBe('invalid_input');
+  });
+
+  it('takes brightness on the note clock — a filter the note can walk', async () => {
+    const result = await edited(createSong(), [
+      { op: 'automation.set', track: 1, target: 'bright', from: 90, to: 20, startBar: 0, endBar: 6, clock: 'note' },
+    ]);
+    expect(result.song.automation[0]).toMatchObject({ target: 'bright', clock: 'note' });
+  });
+
+  it('refuses the note clock where it cannot go: a knob read once, a range past a note, a clock that is neither', async () => {
+    const blank = createSong();
+    expect((await editError(blank, [{ op: 'automation.set', track: 1, target: 'gate', from: 0, to: 9, startBar: 0, endBar: 6, clock: 'note' }]))?.code).toBe('invalid_input');
+    expect((await editError(blank, [{ op: 'automation.set', track: 1, target: 'level', from: 0, to: 9, startBar: 0, endBar: 999, clock: 'note' }]))?.code).toBe('invalid_input');
+    expect((await editError(blank, [{ op: 'automation.set', track: 1, target: 'level', from: 0, to: 9, startBar: 0, endBar: 6, clock: 'beats' }]))?.code).toBe('invalid_input');
+  });
+
+  it('carries the clock through a diff, so a replayed lane is the same lane', async () => {
+    const before = createSong();
+    const withLane = await edited(before, [
+      { op: 'automation.set', track: 1, target: 'level', from: 90, to: 20, startBar: 0, endBar: 6, clock: 'note' },
+    ]);
+    const result = await diff(before, withLane.song);
+    expect(result.edits[0]).toMatchObject({ op: 'automation.set', clock: 'note' });
+    expect(await replayReaches(before, result, withLane.song)).toBe(true);
+  });
+
   it('refuses a target, a channel, a backwards range, a bad index and too many lanes', async () => {
     const blank = createSong();
     expect((await editError(blank, [{ op: 'automation.set', track: 1, target: 'punch', from: 0, to: 9, startBar: 1, endBar: 1 }]))?.code).toBe('invalid_input');
@@ -169,8 +276,8 @@ describe('song.edit writes lanes with automation.set and automation.clear', () =
     expect((await editError(blank, [{ op: 'automation.set', track: 1, target: 'level', from: 0, to: 9, startBar: 3, endBar: 1 }]))?.code).toBe('invalid_input');
     expect((await editError(subject(), [{ op: 'automation.set', index: 9, track: 1, target: 'level', from: 0, to: 9, startBar: 1, endBar: 1 }]))?.code).toBe('not_found');
     expect((await editError(subject(), [{ op: 'automation.clear', index: 9 }]))?.code).toBe('not_found');
-    // A song may hold at most 32 lanes; the 33rd append is refused.
-    const tooMany = Array.from({ length: 33 }, () => ({
+    // A song may hold at most 64 lanes; the 65th append is refused.
+    const tooMany = Array.from({ length: 65 }, () => ({
       op: 'automation.set', track: 1, target: 'level', from: 0, to: 9, startBar: 1, endBar: 1,
     }));
     expect((await editError(blank, tooMany))?.code).toBe('invalid_input');

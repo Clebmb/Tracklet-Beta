@@ -35,7 +35,7 @@
 import { MAX_STUTTER, MIN_STUTTER } from './articulation';
 import { clampMidi } from './notes';
 import { REPEAT_WORD } from './sections';
-import { cellNotes, copyCell, setCellNotes, type Pattern } from './song';
+import { cellNotes, cellStop, copyCell, setCellNotes, type Pattern } from './song';
 
 /**
  * The word between the two ends of a range, spelled exactly as a lane spells its
@@ -85,8 +85,50 @@ export const DEFAULT_ROLL_HITS = 4;
  */
 export const REVERSE_WORD = 'reverse';
 
+/**
+ * The word a range is SHIFTED with, in semitones.
+ *
+ * `octave up` already moves a run by twelve at a time; this is the same move at
+ * the size the music is usually written in. A semitone shift is what "take the
+ * second half up to the relative major" is, and the octave words could not say it
+ * — which is exactly the case §5 says earns a new word rather than a new
+ * statement.
+ */
+export const TRANSPOSE_WORD = 'transpose';
+
+/** How far one `transpose` may move a range, in semitones, either way. */
+export const MIN_TRANSPOSE = -48;
+export const MAX_TRANSPOSE = 48;
+
+/**
+ * The word a range is FILLED with.
+ *
+ * The idea the range grammar was built for and did not have yet: a run of steps
+ * told to keep playing what the note above it was playing. A held note written
+ * once, a bass that should not retrigger, a pad under a bar — all of them are the
+ * same sentence.
+ */
+export const FILL_WORD = 'fill';
+
+/**
+ * The word a range is INTERPOLATED with.
+ *
+ * Two notes and the steps between them, written out evenly: a riser, a fall, the
+ * slide a channel's `glide` would make if it were allowed to take eight steps
+ * instead of one. It writes ordinary cells, so nothing downstream knows it exists.
+ */
+export const INTERPOLATE_WORD = 'interpolate';
+
 /** What a range of steps can be told to do. */
-export type RowTransformId = 'octave-up' | 'octave-down' | 'repeat' | 'roll' | 'reverse';
+export type RowTransformId =
+  | 'octave-up'
+  | 'octave-down'
+  | 'transpose'
+  | 'fill'
+  | 'interpolate'
+  | 'repeat'
+  | 'roll'
+  | 'reverse';
 
 /** One transformation: how it is written, and what it does to the range. */
 export interface RowTransform {
@@ -110,6 +152,9 @@ export interface RowTransform {
 export const ROW_TRANSFORMS: readonly RowTransform[] = [
   { id: 'octave-up', words: 'octave up', what: 'move every note up whole octaves' },
   { id: 'octave-down', words: 'octave down', what: 'move every note down whole octaves' },
+  { id: 'transpose', words: TRANSPOSE_WORD, what: 'move every note by whole semitones' },
+  { id: 'fill', words: FILL_WORD, what: 'keep the note at the top of the range playing down its empty steps' },
+  { id: 'interpolate', words: INTERPOLATE_WORD, what: 'write the empty steps between the range’s first and last note, evenly' },
   { id: 'repeat', words: REPEAT_WORD, what: 'play the range again from where it starts' },
   { id: 'roll', words: ROLL_WORD, what: 'retrigger every hit in the range inside its own step' },
   { id: 'reverse', words: REVERSE_WORD, what: 'read the range backwards — the last step first' },
@@ -190,6 +235,20 @@ export function repeatProblem(range: RowRange, times: number, rows: number): str
  * from the drum it names or quietly turn a kick into a melodic note.
  */
 export function shiftRangeOctaves(pattern: Pattern, range: RowRange, octaves: number): number {
+  return transposeRange(pattern, range, octaves * 12);
+}
+
+/**
+ * Move every note in a range by SEMITONES, and answer with how many moved.
+ *
+ * The octave shift's arithmetic, one size down, and it is the same function: an
+ * octave is twelve of these, so there is one place a range's pitches are moved
+ * and `octave up 2` cannot drift from `transpose 24`. Clamped, drums untouched,
+ * chords moved whole — the rules `shiftRangeOctaves` documents at length.
+ */
+export function transposeRange(pattern: Pattern, range: RowRange, semitones: number): number {
+  const shift = Math.max(MIN_TRANSPOSE, Math.min(MAX_TRANSPOSE, Math.round(semitones)));
+  if (shift === 0) return 0;
   let moved = 0;
   for (let row = range.from; row <= range.to; row += 1) {
     const cells = pattern.steps[row];
@@ -198,11 +257,105 @@ export function shiftRangeOctaves(pattern: Pattern, range: RowRange, octaves: nu
       if (cell.drum !== null) continue;
       const notes = cellNotes(cell);
       if (notes.length === 0) continue;
-      setCellNotes(cell, notes.map((midi) => clampMidi(midi + octaves * 12)));
+      setCellNotes(cell, notes.map((midi) => clampMidi(midi + shift)));
       moved += notes.length;
     }
   }
   return moved;
+}
+
+/** True when a cell sounds something — a note, a chord or a drum. */
+function sounds(cell: { note: number | null; extra: number[]; drum: string | null } | undefined): boolean {
+  return cell !== undefined && (cell.note !== null || cell.drum !== null);
+}
+
+/**
+ * Keep the range playing what was already sounding, down its empty steps.
+ *
+ * Per channel, the note that carries into the range is copied over every empty
+ * step until the channel says something else: the step BEFORE the range is the
+ * seed when it holds a note, so `rows 4 to 15 fill` extends the note written on
+ * step 3, which is what "hold this, but as steps" means. A channel whose first
+ * note is inside the range seeds from there instead.
+ *
+ * Three rules keep it honest: a step that already sounds is left alone (fill
+ * never overwrites music), a STOP is left alone and is not a seed (filling with
+ * silence is `cut`, not `fill`), and a hole at the very top of a channel is simply
+ * not filled, because there is nothing to carry into it.
+ */
+export function fillRange(pattern: Pattern, range: RowRange): number {
+  let written = 0;
+  const width = pattern.steps[range.from]?.length ?? 0;
+  for (let track = 0; track < width; track += 1) {
+    let seed = sounds(pattern.steps[range.from - 1]?.[track]) ? pattern.steps[range.from - 1]![track] : null;
+    for (let row = range.from; row <= range.to; row += 1) {
+      const cell = pattern.steps[row]?.[track];
+      if (!cell) continue;
+      // A stop is a thing the author wrote, so it is neither filled over nor
+      // carried forward: it ends the run it sits in.
+      if (cellStop(cell) !== null) { seed = null; continue; }
+      if (sounds(cell)) { seed = cell; continue; }
+      if (seed === null) continue;
+      const copy = copyCell(seed);
+      cell.note = copy.note;
+      cell.extra = copy.extra;
+      cell.drum = copy.drum;
+      cell.velocity = copy.velocity;
+      cell.slide = copy.slide;
+      cell.stutter = copy.stutter;
+      cell.grace = copy.grace;
+      cell.bend = copy.bend;
+      written += 1;
+    }
+  }
+  return written;
+}
+
+/**
+ * Write the empty steps between a range's notes, evenly, so a run GLIDES.
+ *
+ * Between each pair of anchors — the steps in the range that already hold a
+ * note — every empty step takes the pitch one even fraction of the way from the
+ * first to the second, floor and round alike, so a rise of seven semitones over
+ * four steps is 0, 2, 3, 5, 7 rather than a jump. A chord anchors from its FIRST
+ * note and writes single notes between, because "half a triad" has no meaning and
+ * a run of pitches is what a glide is.
+ *
+ * A drum channel is skipped (a hit has no pitch to slide) and a STOP is left where
+ * it is: it is a point in time the author marked, and interpolating through it
+ * would erase the one thing it says. Fewer than two anchors is nothing to draw a
+ * line between, which is what a range with one note answers with: silence, not a
+ * guess.
+ */
+export function interpolateRange(pattern: Pattern, range: RowRange): number {
+  let written = 0;
+  const width = pattern.steps[range.from]?.length ?? 0;
+  for (let track = 0; track < width; track += 1) {
+    const anchors: { row: number; midi: number; velocity: number }[] = [];
+    for (let row = range.from; row <= range.to; row += 1) {
+      const cell = pattern.steps[row]?.[track];
+      if (!cell || cellStop(cell) !== null) continue;
+      if (cell.drum !== null) continue;
+      const notes = cellNotes(cell);
+      if (notes.length === 0) continue;
+      anchors.push({ row, midi: notes[0], velocity: cell.velocity });
+    }
+    for (let i = 1; i < anchors.length; i += 1) {
+      const from = anchors[i - 1]!;
+      const to = anchors[i]!;
+      const span = to.row - from.row;
+      if (span < 2) continue;
+      for (let k = 1; k < span; k += 1) {
+        const cell = pattern.steps[from.row + k]?.[track];
+        if (!cell || cellStop(cell) !== null) continue;
+        if (cellNotes(cell).length > 0 || cell.drum !== null) continue;
+        setCellNotes(cell, [clampMidi(Math.round(from.midi + ((to.midi - from.midi) * k) / span))]);
+        cell.velocity = from.velocity;
+        written += 1;
+      }
+    }
+  }
+  return written;
 }
 
 /**

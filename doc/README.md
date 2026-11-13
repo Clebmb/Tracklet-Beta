@@ -39,6 +39,7 @@ song like the ones below.
 | [`10-instruments.md`](10-instruments.md) | **Recorded instruments:** importing a Noislet sound pack or a SoundFont, the instrument list, and playing them with `wave font`. |
 | [`11-plugins.md`](11-plugins.md) | **Plugins:** the author's handbook — manifest, params, permissions, and the hello-panel starter. |
 | [`12-plugin-api.md`](12-plugin-api.md) | **Plugin API reference:** every host function, its contract, and the docs rules tests enforce. |
+| [`13-parity-roadmap.md`](13-parity-roadmap.md) | **Where this is going:** the five capabilities that separate Tracklet from a complete tracker — room, note lifetime, bulk editing, portability, movement — the order they ship in, the script-and-MCP gate, and what is deliberately refused. |
 
 ## The one-paragraph version
 

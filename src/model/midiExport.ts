@@ -58,6 +58,7 @@ import {
   clampHold,
   clampVelocity,
   patternRows,
+  cellStop,
   rowNotes,
   strumOffsets,
   songTempoAtSlot,
@@ -291,6 +292,18 @@ interface PlacedNote {
    * snare may still be a KICK.
    */
   drum: DrumId | null;
+  /**
+   * How many STEPS its channel holds before a stop, or null for a note nothing
+   * silences early.
+   *
+   * The MIDI half of `off`/`cut`: the live engine and the renderer RELEASE the
+   * voice at the step that says `off`, so a file that wrote the whole `hold`
+   * would export a pad that rings for the length it was written at rather than
+   * the length it was played. A stop's word does not reach the file — there is no
+   * MIDI event for "release this channel" that is not a note-off — so it reaches
+   * it as the note's own end.
+   */
+  stopSteps: number | null;
 }
 
 /**
@@ -343,6 +356,18 @@ export function songToMidi(song: Song, bounce: BounceRange | null = null): MidiE
       // hit at the start for the whole hold, which is the single entry this line
       // always pushed. A slide's glide is dropped — the writer has no pitch bend
       // — so the hits are asked for with the channel's own `glide` of 0.
+      // The STEPS until the next stop on this channel, within the pattern the
+      // note is written in: a bar is where a stop can be written, so this is the
+      // shortest honest answer — and it is the same "how long did it sound" the
+      // two audio paths release at.
+      let stopSteps: number | null = null;
+      for (let r = at.row + 1; r < pattern.steps.length; r++) {
+        const cell = pattern.steps[r]?.[note.track];
+        if (cell && cellStop(cell) !== null) {
+          stopSteps = r - at.row;
+          break;
+        }
+      }
       for (const hit of articulationHits(note.articulation, 0)) {
         list.push({
           // Measured from the REGION's first step, because a file's clock starts
@@ -350,7 +375,7 @@ export function songToMidi(song: Song, bounce: BounceRange | null = null): MidiE
           // is this number times a step, so subtracting it here is the whole of
           // "the export begins at bar 8".
           step: step - span.first, at: hit.at, length: hit.length, strum,
-          midi: note.midi, velocity: note.velocity, drum: note.drum,
+          midi: note.midi, velocity: note.velocity, drum: note.drum, stopSteps,
         });
       }
     }
@@ -410,12 +435,16 @@ export function songToMidi(song: Song, bounce: BounceRange | null = null): MidiE
     // monophonic rule below needs: the first hit ends where the second begins.
     const ordered = [...notes].sort((a, b) => a.step - b.step || a.at - b.at || a.strum - b.strum || a.midi - b.midi);
     ordered.forEach((note, i) => {
+      // How far a stop shortens this note: `hold` unless its channel is silenced
+      // sooner, in which case it ends at that step — the same length the app
+      // played and the export rendered.
+      const sounding = note.stopSteps === null ? holdTicks : Math.min(holdTicks, note.stopSteps * ticksPerStep);
       // Clamped at zero: a grace hit of a flam sits BEFORE its step, and the very
       // first step of a region has nothing before it — a tick the file cannot
       // hold. The grace lands on the downbeat instead, which is where a listener
       // hears it anyway (it is tens of milliseconds, not a beat).
-      const start = Math.max(0, note.step * ticksPerStep + Math.round(note.at * holdTicks) + Math.round(note.strum * ticksPerStep));
-      const natural = start + Math.max(1, Math.round(note.length * holdTicks));
+      const start = Math.max(0, note.step * ticksPerStep + Math.round(note.at * sounding) + Math.round(note.strum * ticksPerStep));
+      const natural = start + Math.max(1, Math.round(note.length * sounding));
       // A monophonic channel gives way to the note that follows it, so the note it
       // was holding ends where the next one begins; that is the length you HEARD,
       // and writing the full `hold` instead would export a sustaining part that

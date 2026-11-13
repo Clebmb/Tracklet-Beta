@@ -7,7 +7,7 @@ import {
   uiText,
   type Rect,
 } from 'phaser-ui-canvas';
-import { soundShortLabel, stackChip, type UserVoice } from '../model/instrument';
+import { channelShortLabel, stackChip, type UserVoice } from '../model/instrument';
 import { audible } from '../model/mix';
 import { MAX_TRACK_NAME, type Track } from '../model/song';
 import { RenameBox } from './RenameBox';
@@ -292,7 +292,7 @@ export class TrackList {
       // (SQR, TRI, SAW, SIN). Clicking it cycles the waveform; F4 opens the whole
       // voice.
       drawInset(g, { x: waveX, y: waveY, width: WAVE_W, height: 12 }, 1, c);
-      const wave = uiText(this.scene, waveX + Math.floor(WAVE_W / 2), waveY + 2, soundShortLabel(track, this.savedVoices), {
+      const wave = uiText(this.scene, waveX + Math.floor(WAVE_W / 2), waveY + 2, channelShortLabel(track, this.savedVoices), {
         size: 8,
         color: quiet ? c.textDim : c.ward,
         origin: { x: 0.5, y: 0 },

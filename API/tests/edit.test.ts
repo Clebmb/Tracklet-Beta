@@ -291,4 +291,35 @@ describe('the mixer’s controls are reachable as edits', () => {
     const result = await edit({ song: subject(), edits: [{ op: 'bus.set', name: 'MY DRUMS', level: 70 }] });
     expect(result.ok).toBe(false);
   });
+
+  it('writes a STOP, and says what it silenced', async () => {
+    // A stop is a cell, so it is `cell.set` with a gesture rather than an op of
+    // its own — the same shape a drum hit takes.
+    const result = await edited({
+      song: subject(),
+      edits: [{ op: 'cell.set', pattern: 1, row: 1, track: 3, gesture: 'off' }],
+    });
+    expect(result.song.patterns[0].steps[1][2].gesture).toBe('off');
+    // The step holds nothing else: a stop is not a note with a flag on it.
+    expect(result.song.patterns[0].steps[1][2].note).toBeNull();
+    expect(result.edits[0].to).toBe('OFF');
+  });
+
+  it('refuses a step that both starts and ends a sound', async () => {
+    const result = await edit({
+      song: subject(),
+      edits: [{ op: 'cell.set', pattern: 1, row: 1, track: 3, gesture: 'cut', note: 'C-4' }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain('a step is a note, a chord, a drum or a stop');
+  });
+
+  it('refuses a stop the model does not know', async () => {
+    const result = await edit({
+      song: subject(),
+      edits: [{ op: 'cell.set', pattern: 1, row: 1, track: 3, gesture: 'mute' }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain('is not a stop');
+  });
 });

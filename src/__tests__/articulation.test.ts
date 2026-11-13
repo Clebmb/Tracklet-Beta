@@ -189,7 +189,7 @@ describe('the promise: a note that says nothing is the note it always was', () =
     // And a plain cell answers the default rather than `undefined`, which is what
     // lets the scheduler treat the two identically.
     const plain = createSong();
-    plain.patterns[0].steps[0][0] = { note: 60, extra: [], drum: null, velocity: 100, slide: false, stutter: 1, grace: 0, bend: 0 };
+    plain.patterns[0].steps[0][0] = { note: 60, extra: [], drum: null, gesture: null, velocity: 100, slide: false, stutter: 1, grace: 0, bend: 0 };
     expect(rowNotes(plain.patterns[0], 0)[0].articulation).toEqual(NO_ARTICULATION);
   });
 });
@@ -253,14 +253,14 @@ describe('the word', () => {
   it('goes back to plain when a script starts a new song', () => {
     const song = played('C-4>*3');
     const fresh = applied(song, 'new\ntracks 1\nC-4');
-    expect(firstCell(fresh)).toEqual({ note: 60, extra: [], drum: null, velocity: 100, slide: false, stutter: 1, grace: 0, bend: 0 });
+    expect(firstCell(fresh)).toEqual({ note: 60, extra: [], drum: null, gesture: null, velocity: 100, slide: false, stutter: 1, grace: 0, bend: 0 });
   });
 });
 
 describe('the file', () => {
   it('writes version 12 for a song whose notes are plain, with no key anywhere', () => {
     const plain = createSong();
-    plain.patterns[0].steps[0][0] = { note: 60, extra: [], drum: null, velocity: 100, slide: false, stutter: 1, grace: 0, bend: 0 };
+    plain.patterns[0].steps[0][0] = { note: 60, extra: [], drum: null, gesture: null, velocity: 100, slide: false, stutter: 1, grace: 0, bend: 0 };
     const raw = JSON.parse(songToJson(plain)) as Record<string, unknown>;
     expect(raw.version).toBe(SONG_FILE_VERSION);
     expect(JSON.stringify(raw)).not.toContain('slide');

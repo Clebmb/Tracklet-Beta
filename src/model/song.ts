@@ -50,6 +50,9 @@ import { DEFAULT_SPEED, speedFactor } from './speed';
 import type { Layer } from './instrument';
 import { copyKey, DEFAULT_KEY, type SongKey } from './scale';
 import { DEFAULT_SHAPE, type FilterShape } from './shape';
+import type { KeyZone } from './zone';
+import type { Slice } from './slice';
+import type { WaveTable } from './wavetable';
 import { DEFAULT_TUNING, type TuningId } from './tuning';
 import { voiceForTrack, type VoiceParams } from './voice';
 // The kit table, one way: `drum.ts` knows the four drums and their pitches, and
@@ -157,6 +160,60 @@ export interface Cell {
    */
   grace: number;
   /**
+   * How LATE this hit lands, in TICKS: `0` on the step, `2` two ticks after it.
+   *
+   * A tick is one sixth of a step (`LATE_TICKS_PER_STEP`), which is the resolution
+   * a groove actually needs — a snare behind the beat is a few percent, not a
+   * whole step — and it is a fraction of a STEP rather than a fixed time, so the
+   * push sounds the same at any tempo, like every other gesture here.
+   *
+   * The one clause about WHEN rather than HOW: velocity is how hard, slide and
+   * stutter are how it arrives, and this is where in time it arrives. Absent (and
+   * `0`) is exactly on the step, which is every cell in every song written before
+   * it, so nothing moves for a song that never asks.
+   */
+  late?: number;
+  /**
+   * How far INTO its recording this hit begins, as a percentage of the sample's
+   * own length: `25` skips the first quarter, which is how a break with a slow
+   * attack is played from the crackle rather than from the silence in front of
+   * it.
+   *
+   * A percentage rather than seconds for `late`'s reason — it is the same
+   * fraction of the same file whoever plays it, so a trimmed sample and a whole
+   * one agree about where a quarter is. Measured inside the window the note
+   * already plays (a slice's piece, a take's trim), because that window IS the
+   * instrument; seeking past it would play the piece next door.
+   *
+   * Absent (and `0`) starts at the recording's own start, which is every cell in
+   * every song written before it.
+   */
+  start?: number;
+  /**
+   * Where this hit sits between the speakers, -100 (hard left) .. 100 (hard
+   * right), RELATIVE to the channel's own pan: `pan 0 1 2 L30` puts one hat left
+   * of a kit that is otherwise centred.
+   *
+   * A per-hit field because that is what a stereo recording is: the snare and the
+   * closed hat come off the same channel and sit in different places. Absent (and
+   * `0`) is the centre — not "the channel's position", but no lean of its own,
+   * which is every cell written before this.
+   */
+  pan?: number;
+  /**
+   * How much of the note's own length it FADES through, as a percentage: `40`
+   * means the last four tenths are the fall, and it is silent at the end.
+   *
+   * A fade rather than a shorter `hold`, because the two answer different
+   * questions: shortening the hold cuts the note off, and this lets it fall away.
+   * It is the one clause here about the note's END rather than its start, and it
+   * has to live on the cell because how long a note is is the channel's `hold`
+   * while how it leaves is this note's own business.
+   *
+   * Absent (and `0`) leaves the note's envelope exactly as it was.
+   */
+  fade?: number;
+  /**
    * How far this note BENDS its own pitch, in semitones, signed: `+N` scoops up
    * into the note (`C-4^2`), `-N` falls away from it (`C-4v2`), and `0` — the
    * default — holds the pitch it was written at.
@@ -169,6 +226,63 @@ export interface Cell {
    * tuning, which is what the vibrato rides too.
    */
   bend: number;
+  /**
+   * A STOP: this step silences whatever the channel is still holding, instead of
+   * starting something. `off` releases it, `cut` chokes it.
+   *
+   * The fourth thing a cell can be, after a note, a chord and a drum, and the one
+   * the notation was missing: without it a note rings for its channel's `hold`
+   * and the only way to end it early was to shorten the whole channel. `off` on
+   * step 6 of a `hold 16` pad is how a pad stops on step 6.
+   *
+   * It is a STOP rather than an effect column on purpose. A tracker's effect
+   * column is a grid of two-character codes, which is the one thing this app
+   * refuses to teach (see the roadmap's non-goals); a step that says `OFF` in the
+   * same three characters every other cell uses is read by the same eye in the
+   * same place.
+   */
+  gesture: StopId | null;
+}
+
+/**
+ * The two ways a step can end a note: `off` lets it go, `cut` bites it off.
+ *
+ * `off` releases the voice the way the channel's own envelope would, so a pad
+ * fades and a bass thuds to a stop; `cut` silences it in a few milliseconds, for
+ * the chop a sampler's mute group makes. Two words rather than one because they
+ * are two sounds, and a notation that could only say one of them would make the
+ * other impossible to write at all.
+ */
+export type StopId = 'off' | 'cut';
+
+/** The stop words as a grid writes them, and the label a cell shows. */
+export const STOP_WORDS: readonly { id: StopId; word: string; label: string }[] = [
+  { id: 'off', word: 'off', label: 'OFF' },
+  { id: 'cut', word: 'cut', label: 'CUT' },
+];
+
+/** The stop a grid word names, or null when it names no stop at all. */
+export function stopFromName(word: string): StopId | null {
+  const lower = word.trim().toLowerCase();
+  return STOP_WORDS.find((one) => one.word === lower)?.id ?? null;
+}
+
+/** How a stop is written in a cell: `OFF`, `CUT`. */
+export function stopLabel(stop: StopId): string {
+  return STOP_WORDS.find((one) => one.id === stop)?.label ?? 'OFF';
+}
+
+/**
+ * The stop a cell IS, or null — the one reader of the field.
+ *
+ * Every reader goes through this rather than comparing `cell.gesture` itself, so
+ * a cell built before stops existed (a fixture, a hand-written object, a plugin
+ * panel's own copy) reads as the plain step it is instead of as a stop. Reading
+ * `gesture !== null` on such a cell would be true for `undefined` and would turn
+ * every empty step in a song into an instruction to silence a channel.
+ */
+export function cellStop(cell: Cell): StopId | null {
+  return cell.gesture ?? null;
 }
 
 /** A channel: a name, a SOUND, a note length and whether it is muted. */
@@ -479,6 +593,40 @@ export interface Track {
    * missing flavour and never a missing note.
    */
   sample: string | null;
+  /**
+   * The KEYMAP: which recording this channel plays, by note. See `model/zone.ts`.
+   *
+   * Absent (and empty) is the channel this app has always had — one recording for
+   * the whole keyboard, transposed from middle C. Raised, notes from a zone's
+   * boundary upward play that zone's recording instead, so a piano can be sampled
+   * in octaves and a tom can sound like itself. The lowest zone owns the keyboard
+   * below it too, and the channel's own `sample` is the floor UNDER the map — it
+   * plays when there is no map, or when a zone names a file this machine lacks —
+   * so a keymap never silences a note.
+   */
+  zones?: KeyZone[];
+  /**
+   * The SLICES: the pieces this channel's recording was chopped into. See
+   * `model/slice.ts`.
+   *
+   * Absent is the channel this app has always had — the recording played whole.
+   * Raised, the note NUMBER picks the piece: C-4 is the first, C#-4 the second, so
+   * a chopped break is played like an instrument rather than loaded as eight
+   * files. A note past the last piece plays the whole recording, so the keyboard
+   * above the chop still sounds.
+   */
+  slices?: Slice[];
+  /**
+   * A WAVETABLE of the channel's own, or absent for the chip bank. See
+   * `model/wavetable.ts`.
+   *
+   * Only read by a `wave table` channel: the spectrum replaces the bank entry a
+   * `duty` would pick, so the same voice gains a shape you wrote rather than one
+   * the console chose. It lives on the channel — not in a song-wide library — for
+   * the reason a voice's knobs do: a table IS the sound of the thing that plays it,
+   * and it travels with it through every path a voice already takes.
+   */
+  table?: WaveTable;
   /**
    * The ID of the plugin instrument this channel plays, or `null` for none.
    *
@@ -1440,6 +1588,15 @@ export interface Pattern {
 export interface Song {
   title: string;
   /**
+   * Who made it, and what it borrows — free text that travels with the song.
+   *
+   * Song data rather than app state, for the pack's reason: a bundle exists so a
+   * song arrives COMPLETE, and "who did this, and what slice is in it" is part of
+   * what a person hands over. Absent on every song written before it, which is
+   * what keeps an uncredited song byte-identical to the file it was.
+   */
+  credits?: string;
+  /**
    * The key the song is written in — a map for the piano and the grid, never a
    * cage. See `scale.ts`: nothing snaps, locks or refuses, so a song with a
    * chromatic chorus is still a song this app will play happily.
@@ -1724,7 +1881,18 @@ export const DEFAULT_TRACKS = 4;
 export const ROWS_PER_BEAT = 4;
 export const MIN_ROWS_PER_BEAT = 1;
 export const MAX_ROWS_PER_BEAT = 16;
-export const MAX_TRACKS = 8;
+/**
+ * How many channels a song may have: sixteen, which is two banks of eight.
+ *
+ * Eight was the old ceiling, and the number the tracker was drawn around; sixteen
+ * is the number of channels a Furnace or Renoise song is expected to hold. The
+ * grid shows one BANK of eight at a time — `TRACKS_PER_BANK` — so the cells keep
+ * the width every song was drawn with, and the cursor brings its bank with it.
+ */
+export const MAX_TRACKS = 16;
+
+/** The channels a bank holds: the width the grid was drawn for. */
+export const TRACKS_PER_BANK = 8;
 export const MIN_TRACKS = 1;
 /**
  * How long a channel name may be.
@@ -1751,19 +1919,44 @@ export const MAX_TRACK_NAME = 16;
  * because display room depends on the glyphs and this limit cannot.
  */
 export const MAX_SONG_TITLE = 32;
+
+/** How long a credits line may be: long enough for a name, a sample source and a
+ * thanks, short enough that it stays a credit and not a sleeve essay. */
+export const MAX_CREDITS = 200;
+
+/** A credits line as the song stores it: trimmed, and empty means none. */
+export function tidyCredits(text: string): string | undefined {
+  const trimmed = text.trim().replace(/\s+/g, ' ');
+  return trimmed === '' ? undefined : trimmed.slice(0, MAX_CREDITS);
+}
 /** What a brand-new song is called, until you say otherwise. */
 export const UNTITLED_TITLE = 'UNTITLED SONG';
-/** A ceiling on patterns, so a typo like `pattern 9999` cannot eat the heap. */
-export const MAX_PATTERNS = 64;
+/**
+ * A ceiling on patterns, so a typo like `pattern 9999` cannot eat the heap.
+ *
+ * Sixty-four was the first number, and it fit a two-minute song: one pattern per
+ * bar, a section repeat, and nothing spare. Doubling it to 128 is what lets a
+ * song keep a verse, a chorus and a variation per part without `copy`-ing a
+ * pattern it already has, and it still bounds the file, the pattern stepper and
+ * the `F3` list at a size one session can hold.
+ */
+export const MAX_PATTERNS = 128;
 /**
  * How many slots a song may have.
  *
+ * Sixty-four was the wrong number, and it is the reason this changed: at the
+ * default 16-step bar and 128 BPM a slot is one bar of 1.875 s, so sixty-four
+ * slots is **two minutes** of music. A three-minute song needs 96 bars and a
+ * four-minute one needs 128 — before a single repeated chorus. Two hundred and
+ * fifty-six slots is four minutes of UNREPEATED bars, which is a whole song with
+ * room left for an intro and an outro.
+ *
  * Longer than `MAX_PATTERNS` on purpose: a song repeats bars, so a four-bar
- * chorus is four slots of two patterns. Sixty-four slots is sixteen bars four
- * times over — more than anyone writes in one sitting — and it keeps the order
- * short enough to read on one screen and to print in a header.
+ * chorus is four slots of two patterns. The `F3` list and the ARRANGER both
+ * window and scroll, so the ceiling costs no layout; it only bounds a runaway
+ * generator, and it keeps the header's bar readout a number a person can read.
  */
-export const MAX_ORDER = 64;
+export const MAX_ORDER = 256;
 
 /** One beat in seconds at a tempo. */
 export function secondsPerBeat(bpm: number): number {
@@ -2396,12 +2589,41 @@ export function tempoPointLabel(point: TempoPoint): string {
 
 // --- factories --------------------------------------------------------------
 
+/**
+ * How many TICKS of a step a hit may land late, where a tick is a sixth of a step.
+ *
+ * Three ticks is a third of the step — past that a hit is closer to the NEXT step
+ * than to its own, and a beat written that far behind the grid belongs on the step
+ * it actually sounds on.
+ */
+export const MAX_LATE = 3;
+
+/** A tick is this much of a step. Six, so the grid's own resolution stays clean. */
+export const LATE_TICKS_PER_STEP = 6;
+
+/** A `late` the model can hold: whole ticks, never negative, never past `MAX_LATE`. */
+export function clampLate(ticks: number): number {
+  if (!Number.isFinite(ticks)) return 0;
+  return Math.max(0, Math.min(MAX_LATE, Math.round(ticks)));
+}
+
+/**
+ * How long a `late` is, in seconds, at this step's length.
+ *
+ * The one place a tick becomes time, so the scheduler and the renderer push a hit
+ * by the same amount — and because it is a fraction of the STEP, the push sounds
+ * the same at any tempo.
+ */
+export function lateSeconds(late: number, stepSeconds: number): number {
+  return (clampLate(late) / LATE_TICKS_PER_STEP) * stepSeconds;
+}
+
 export function emptyCell(): Cell {
   // An empty step is at the DEFAULT velocity rather than at zero: the velocity
   // only means anything on a note, and a fresh grid that has to be "raised" to
   // full before it can be heard would be a trap.
   return {
-    note: null, extra: [], drum: null,
+    note: null, extra: [], drum: null, gesture: null,
     velocity: DEFAULT_VELOCITY, slide: false, stutter: DEFAULT_STUTTER, grace: 0, bend: 0,
   };
 }
@@ -2456,6 +2678,24 @@ export function setCellDrum(cell: Cell, drum: DrumId | null): void {
   cell.extra = [];
   cell.drum = drum;
   cell.note = drum === null ? null : drumPitch(drum);
+  // A hit starts a sound, so it cannot also be the step that ends one.
+  cell.gesture = null;
+}
+
+/**
+ * Make a cell a STOP: silence the channel here rather than start a note.
+ *
+ * The fourth writer, with the same "writing a cell writes its whole self" rule:
+ * a stop holds no note, no chord and no drum, because a step that both started a
+ * sound and stopped it would have to be read twice to know which happened. The
+ * note writers above take a stop off in the same breath, so whichever word is
+ * written last is what the step is.
+ */
+export function setCellStop(cell: Cell, stop: StopId | null): void {
+  cell.note = null;
+  cell.extra = [];
+  cell.drum = null;
+  cell.gesture = stop;
 }
 
 /**
@@ -2471,8 +2711,10 @@ export function setCellDrum(cell: Cell, drum: DrumId | null): void {
  */
 export function setCellNotes(cell: Cell, notes: readonly number[]): void {
   // Writing notes takes the DRUM off: a step is one thing, and every writer here
-  // says so in the same breath. A drum hit is written by `setCellDrum` instead.
+  // says so in the same breath. A drum hit is written by `setCellDrum` instead —
+  // and a STOP is a third writer again, so it goes too.
   cell.drum = null;
+  cell.gesture = null;
   const kept: number[] = [];
   for (const note of notes) {
     const midi = clampMidi(note);
@@ -2493,6 +2735,30 @@ export function setCellNotes(cell: Cell, notes: readonly number[]): void {
  * the worst kind of bug this app can have: a copied bar that plays differently
  * from the bar it was copied from.
  */
+/** The most a note can seek into its sample: past this, what is left is a
+ * click rather than an attack, and the note would be a shorter one written
+ * awkwardly. Percentages are clamped rather than refused, `late`'s bargain one
+ * clause along: a file that says 400% meant "as far as it goes". */
+export const MAX_START = 95;
+
+/** The most of a note a fade may take: all of it is a note that only ever falls,
+ * which is a swell the other way round — allowed, and the reason the floor is 1
+ * rather than 0 (below one percent the ramp is a click, not a fade). */
+export const MAX_FADE = 100;
+export const MIN_FADE = 1;
+
+export function clampFade(percent: number): number {
+  const amount = typeof percent === 'number' && Number.isFinite(percent) ? Math.round(percent) : 0;
+  if (amount <= 0) return 0;
+  return Math.max(MIN_FADE, Math.min(MAX_FADE, amount));
+}
+
+/** Where a seek lands, as a fraction: `25` is a quarter of the way in. */
+export function startFraction(percent: number | undefined): number {
+  const amount = typeof percent === 'number' && Number.isFinite(percent) ? percent : 0;
+  return Math.max(0, Math.min(MAX_START, amount)) / 100;
+}
+
 export function copyCell(cell: Cell): Cell {
   return {
     note: cell.note,
@@ -2509,6 +2775,18 @@ export function copyCell(cell: Cell): Cell {
     stutter: cell.stutter,
     grace: cell.grace,
     bend: cell.bend,
+    // And which speaker it leans toward, when it leans at all.
+    pan: cell.pan,
+    // And how it leaves, when it fades.
+    fade: cell.fade,
+    // Where it starts in its sample travels too: a copied bar skips the same
+    // attack the one it came from skipped.
+    start: cell.start,
+    // When the hit lands travels with it, like its force: a copied bar plays a
+    // beat late in the same place the bar it was copied from did.
+    late: cell.late,
+    // A stop is a word and no copy can alias it, like a drum's id.
+    gesture: cell.gesture,
   };
 }
 
@@ -2690,9 +2968,43 @@ export function setTrackCount(song: Song, count: number): void {
   reshape(song);
 }
 
-/** How many steps every pattern in a song has (they share one grid). */
+/**
+ * How long the song's grid is: the length `steps` sets, and the length a pattern
+ * has unless it names one of its own.
+ *
+ * Patterns MAY differ — `steps 32 pattern 3` gives pattern 3 a longer grid than
+ * its neighbours, which is how a fill or a long intro is written in one song —
+ * so this is the song-level number rather than a promise about every pattern.
+ * Anything that needs one pattern's own length asks `patternLength`. This one is
+ * for the order's arithmetic: how far one bar of the arrangement reaches.
+ */
 export function patternRows(song: Song): number {
   return song.patterns[0]?.steps.length ?? DEFAULT_ROWS;
+}
+
+/** How long ONE pattern is, in steps. */
+export function patternLength(song: Song, index: number): number {
+  return song.patterns[index]?.steps.length ?? patternRows(song);
+}
+
+/**
+ * Resize ONE pattern to `rows` steps, leaving its neighbours alone.
+ *
+ * The narrow sibling of `setPatternRows`: same padding and trimming rules, one
+ * pattern instead of all of them. Two patterns of different lengths are a real
+ * song shape — a sixteen-step verse and a thirty-two-step chorus — and the grid,
+ * the editor and the MIDI export all read `pattern.steps.length` already, so the
+ * only thing they needed was a way to write one.
+ */
+export function setPatternLength(song: Song, index: number, rows: number): void {
+  const pattern = song.patterns[index];
+  if (!pattern) return;
+  const target = clampRows(rows);
+  while (pattern.steps.length < target) {
+    pattern.steps.push(Array.from({ length: song.tracks.length }, emptyCell));
+  }
+  if (pattern.steps.length > target) pattern.steps.length = target;
+  reshape(song);
 }
 
 /**
@@ -2892,10 +3204,10 @@ export function isPatternEmpty(pattern: Pattern): boolean {
 export function rowNotes(
   pattern: Pattern,
   row: number,
-): { track: number; midi: number; velocity: number; articulation: Articulation; drum: DrumId | null }[] {
+): { track: number; midi: number; velocity: number; articulation: Articulation; drum: DrumId | null; late?: number; start?: number; pan?: number; fade?: number }[] {
   const cells = pattern.steps[row];
   if (!cells) return [];
-  type RowNote = { track: number; midi: number; velocity: number; articulation: Articulation; drum: DrumId | null };
+  type RowNote = { track: number; midi: number; velocity: number; articulation: Articulation; drum: DrumId | null; late?: number; start?: number; pan?: number; fade?: number };
   const out: RowNote[] = [];
   cells.forEach((cell, track) => {
     // The articulation travels WITH the note rather than being looked up later,
@@ -2907,9 +3219,53 @@ export function rowNotes(
     // The DRUM travels with the note for the same reason, and it is only ever on
     // the cell's FIRST note: a drum hit holds no chord, so a row answers with one
     // drum note per drum cell and the pitch beside it is the drum's own.
+    // When it lands travels with it too, and a chord shares that as it shares its
+    // force: one cell is one hit in time.
+    const late = clampLate(cell.late ?? 0);
+    // How far into its sample the hit begins travels with the note for the same
+    // reason, and is written only when it says something.
+    const start = cell.start !== undefined ? Math.round(startFraction(cell.start) * 100) : 0;
+    // And where it sits in the field, when it moves off centre.
+    const pan = cell.pan !== undefined ? clampPan(cell.pan) : 0;
+    // And how much of its length it fades away through, when it fades at all.
+    const fade = cell.fade !== undefined ? clampFade(cell.fade) : 0;
     for (const midi of cellNotes(cell)) {
-      out.push({ track, midi, velocity, articulation, drum: cell.drum });
+      // Written only when it says something, so a note on the step answers with
+      // exactly the record it always did — every reader that deep-compares a row
+      // keeps comparing what it compared.
+      out.push({ track, midi, velocity, articulation, drum: cell.drum, ...(late > 0 ? { late } : {}), ...(start > 0 ? { start } : {}), ...(pan !== 0 ? { pan } : {}), ...(fade > 0 ? { fade } : {}) });
     }
+  });
+  return out;
+}
+
+/**
+ * A stop on one row: which channel it silences, and how.
+ *
+ * Its own type rather than a note with an empty pitch, because the sequencers do
+ * something completely different with it — they RELEASE whatever is sounding
+ * rather than start anything — and a consumer that mistook one for a note would
+ * play a pitch that is not in the song.
+ */
+export interface RowStop {
+  track: number;
+  stop: StopId;
+}
+
+/**
+ * Every stop on a row, for the sequencers.
+ *
+ * The mirror of `rowNotes`, and the same shape of answer: one entry per channel
+ * that stops here. A row with no stops answers with an empty list, which is every
+ * row a song written before stops had.
+ */
+export function rowStops(pattern: Pattern, row: number): RowStop[] {
+  const cells = pattern.steps[row];
+  if (!cells) return [];
+  const out: RowStop[] = [];
+  cells.forEach((cell, track) => {
+    const stop = cellStop(cell);
+    if (stop !== null) out.push({ track, stop });
   });
   return out;
 }
@@ -2927,6 +3283,11 @@ export function rowNotes(
  * file's: the grid is a glance, not a read-out.
  */
 export function cellText(cell: Cell): string {
+  // A STOP wears its word, in the same three characters a note or a drum gets:
+  // `OFF` is what the step does, and a `...` that also meant "this one stops the
+  // pad" would hide the only interesting thing about the step.
+  const stop = cellStop(cell);
+  if (stop !== null) return stopLabel(stop);
   if (cell.note === null) return '...';
   // A drum wears its NAME rather than its pitch, because nobody can hear a kick
   // in `C-2`: `KCK` is the percussion step view in the three characters a column

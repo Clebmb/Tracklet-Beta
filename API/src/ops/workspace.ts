@@ -24,6 +24,7 @@ import {
   countMachineHits,
   createSong,
   describeMachine,
+  laneClock,
   laneLabel,
   laneScript,
   laneValueAt,
@@ -103,18 +104,34 @@ function laneGroups(song: Song): unknown[] {
   return [...groups.values()];
 }
 
-/** One lane as data: its ends, its bars, and its value on each bar it spans. */
+/**
+ * One lane as data: its ends, its clock, and its value across the range.
+ *
+ * A note-clock lane is walked in STEPS SINCE THE HIT rather than in bars — the
+ * bars of the order mean nothing to it — so its values are addressed by step. That
+ * keeps `arranger.describe` honest about a lane the arranger draws against notes
+ * rather than against the timeline.
+ */
 function laneDigest(lane: AutomationLane, perBar: number): unknown {
-  const values: { bar: number; value: number }[] = [];
-  for (let bar = lane.startBar; bar <= lane.endBar; bar += 1) {
-    const value = laneValueAt(lane, (bar - 1) * perBar, perBar);
-    if (value !== null) values.push({ bar, value });
+  const note = laneClock(lane) === 'note';
+  const values: { bar?: number; step?: number; value: number }[] = [];
+  if (note) {
+    for (let step = lane.startBar; step <= lane.endBar; step += 1) {
+      const value = laneValueAt(lane, 0, perBar, step);
+      if (value !== null) values.push({ step, value });
+    }
+  } else {
+    for (let bar = lane.startBar; bar <= lane.endBar; bar += 1) {
+      const value = laneValueAt(lane, (bar - 1) * perBar, perBar);
+      if (value !== null) values.push({ bar, value });
+    }
   }
   return {
     track: lane.track,
     target: lane.target,
     from: lane.from,
     to: lane.to,
+    clock: note ? 'note' : 'bars',
     startBar: lane.startBar,
     endBar: lane.endBar,
     label: laneLabel(lane),

@@ -309,7 +309,7 @@ describe('repeating a section', () => {
     expect(refused(`${FORM}arrange VERSE ${REPEAT_WORD}`)).toContain('how many times');
     expect(refused(`${FORM}arrange VERSE ${REPEAT_WORD} twice`)).toContain('how many times');
     expect(refused(`${FORM}arrange VERSE ${REPEAT_WORD} 0`)).toContain('how many times');
-    expect(refused(`${FORM}arrange VERSE ${REPEAT_WORD} 99`)).toContain('how many times');
+    expect(refused(`${FORM}arrange VERSE ${REPEAT_WORD} ${MAX_REPEAT + 1}`)).toContain('how many times');
     // `repeat 1` is refused for the same reason a cell refuses `*1`: a count that
     // means nothing should not look like a count that did something.
     expect(refused(`${FORM}arrange VERSE ${REPEAT_WORD} 1`)).toContain('just the name on its own');

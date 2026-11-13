@@ -14,6 +14,7 @@
  *   plugins/<id>/manifest.json       the manifest the song pinned
  *   plugins/<id>/<entry basename>    the module source (`./index.ts` -> `index.ts`)
  *   samples/<NAME>.wav               a named recording the song plays
+ *   kits/<NAME>.json                 a kit of your own the song NAMES
  *
  * Building and parsing are both pure bytes in, answers out: the scene
  * collects the parts (its banks, its manifests) and acts on what comes back
@@ -30,6 +31,15 @@ export const BUNDLE_SONG_NAME = 'song.json';
 export const BUNDLE_PLUGIN_DIR = 'plugins';
 /** Where the song's named recordings live: `samples/<NAME>.wav`. */
 export const BUNDLE_SAMPLE_DIR = 'samples';
+/**
+ * Where a KIT OF YOUR OWN travels: `kits/<NAME>.json`.
+ *
+ * A song names its kit and the voices behind that name live in the app's kit
+ * library — so without this a bundle arrived with the right name and the wrong
+ * drummer, falling back to a built-in kit and saying nothing. Only the kit the
+ * song NAMES is packed: a library of twenty is not the song.
+ */
+export const BUNDLE_KIT_DIR = 'kits';
 /** A bundle download: `<stem>.tracklet-bundle.zip`, beside `<stem>.json`. */
 export function songBundleFileName(stem: string): string {
   return `${stem}.tracklet-bundle.zip`;
@@ -51,11 +61,18 @@ export interface SongBundleSample {
   wavBytes: Uint8Array;
 }
 
+/** One bundled kit of your own: the name the song says plus the voices. */
+export interface SongBundleKit {
+  name: string;
+  json: unknown;
+}
+
 /** A bundle opened: the song plus everything it names. */
 export interface SongBundle {
   songJson: string;
   plugins: SongBundlePlugin[];
   samples: SongBundleSample[];
+  kits: SongBundleKit[];
 }
 
 /** The file a wav travels under: the sample name with path characters folded. */
@@ -80,6 +97,8 @@ export function buildSongBundle(parts: {
   songJson: string;
   plugins: readonly { id: string; manifestJson: unknown; moduleText: string; entry: string }[];
   samples: readonly { name: string; wavBytes: Uint8Array }[];
+  /** The kits of your own the song names — usually none, or one. */
+  kits?: readonly { name: string; json: unknown }[];
 }): Uint8Array {
   const files: { name: string; bytes: Uint8Array }[] = [
     { name: BUNDLE_SONG_NAME, bytes: new TextEncoder().encode(parts.songJson) },
@@ -96,6 +115,12 @@ export function buildSongBundle(parts: {
   }
   for (const sample of parts.samples) {
     files.push({ name: `${BUNDLE_SAMPLE_DIR}/${bundleSampleName(sample.name)}`, bytes: sample.wavBytes });
+  }
+  for (const kit of parts.kits ?? []) {
+    files.push({
+      name: `${BUNDLE_KIT_DIR}/${bundleSampleName(kit.name).replace(/\.wav$/, '.json')}`,
+      bytes: new TextEncoder().encode(JSON.stringify(kit.json)),
+    });
   }
   return zipStore(files);
 }
@@ -139,7 +164,21 @@ export function parseSongBundle(bytes: Uint8Array): { ok: true; bundle: SongBund
     const base = file.name.slice(BUNDLE_SAMPLE_DIR.length + 1);
     samples.push({ name: base.slice(0, -'.wav'.length), wavBytes: file.bytes.slice() });
   }
-  return { ok: true, bundle: { songJson, plugins, samples } };
+  // The kits of your own. A kit file that does not parse REFUSES the bundle,
+  // plugins' reason one folder over: a half-carried kit is a song that plays
+  // somebody else's drums without saying so.
+  const kits: SongBundleKit[] = [];
+  for (const file of read.files) {
+    if (!file.name.startsWith(`${BUNDLE_KIT_DIR}/`) || !file.name.toLowerCase().endsWith('.json')) continue;
+    const base = file.name.slice(BUNDLE_KIT_DIR.length + 1);
+    const name = base.slice(0, -'.json'.length);
+    try {
+      kits.push({ name, json: JSON.parse(new TextDecoder('utf-8').decode(file.bytes)) });
+    } catch {
+      return { ok: false, error: `that bundle\u2019s kit \"${name}\" is not JSON: every kit in a bundle has to parse.` };
+    }
+  }
+  return { ok: true, bundle: { songJson, plugins, samples, kits } };
 }
 
 /** What a zip is, before anything opens it: a song bundle, a plugin, or neither. */

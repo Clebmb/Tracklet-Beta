@@ -140,6 +140,28 @@ describe('the engine builds a table wave', () => {
     expect(oscillators[0].type).toBe('square');
   });
 
+  it('wears a table of the channel\u2019s OWN when one is handed to the note', () => {
+    const fake = fakeContext();
+    buildNote(fake.ctx as unknown as BaseAudioContext, patchFromVoice(tableVoice(10)), 60, 0, 1, DESTINATION, null, {
+      table: [1, 0, 0.5],
+    });
+    const worn = fake.oscillators[0].table!;
+    // `imag[n]` is harmonic n, so the fundamental is `imag[1]` — the amplitudes the
+    // channel wrote, in the place the oscillator reads them.
+    expect(Array.from(worn.imag.slice(1, 4))).toEqual([1, 0, 0.5]);
+    // And it is NOT the bank entry the same `duty` would have picked, which is the
+    // whole difference between "a wavetable" and "a wavetable of your own".
+    const bank = build(tableVoice(10)).oscillators[0].table!;
+    expect(Array.from(worn.imag)).not.toEqual(Array.from(bank.imag));
+  });
+
+  it('keeps the bank when no table is handed over', () => {
+    const plain = build(tableVoice(10)).oscillators[0].table!;
+    const fake = fakeContext();
+    buildNote(fake.ctx as unknown as BaseAudioContext, patchFromVoice(tableVoice(10)), 60, 0, 1, DESTINATION, null, {});
+    expect(Array.from(fake.oscillators[0].table!.imag)).toEqual(Array.from(plain.imag));
+  });
+
   it('caches one table per bank slot', () => {
     const { ctx, calls } = fakeContext();
     const real = ctx as unknown as BaseAudioContext;

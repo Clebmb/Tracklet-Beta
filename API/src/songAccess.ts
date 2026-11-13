@@ -16,8 +16,12 @@
  */
 
 import {
+  clampFade,
+  clampLate,
+  clampPan,
   countSongNotes,
   createSong,
+  startFraction,
   keyName,
   midiToNoteName,
   patternRows,
@@ -94,6 +98,18 @@ export interface TrackDigest {
   hold: number;
   poly: number;
   muted: boolean;
+  /**
+   * What the channel plays per note: the recording it names, the KEYMAP that
+   * overrides it per register, the SLICES it was chopped into, and the name of a
+   * WAVETABLE of its own. Four things a musician set and an agent must not have
+   * to infer from an empty `notes` count.
+   */
+  plays: {
+    sample: string | null;
+    keymap: { note: number; sample: string }[];
+    slices: { start: number; end: number }[];
+    table: string | null;
+  };
 }
 
 export interface PatternDigest {
@@ -109,6 +125,8 @@ export interface PatternDigest {
 
 export interface SongDescription {
   title: string;
+  /** Who made the song and what it borrows, or null when it says nothing. */
+  credits: string | null;
   key: string;
   bpm: number;
   steps: number;
@@ -117,6 +135,10 @@ export interface SongDescription {
   tracks: number;
   patterns: number;
   notes: number;
+  /** How many cells carry a CLAUSE (a push, a seek, a pan, a fade). `0` on a
+   * song written before any of them existed, which is what makes it useful as a
+   * "did my phrasing land" check rather than a count of everything. */
+  gestures: number;
   lanes: number;
   buses: number;
   sections: number;
@@ -147,6 +169,16 @@ function countCells(song: Song): { perTrack: TrackDigest[]; perPattern: PatternD
     hold: track.hold,
     poly: track.poly,
     muted: track.muted,
+    // What the channel PLAYS, in the same digest as what it holds: a keymap, a
+    // chop and a table are three facts about a channel that used to be visible
+    // only in a script or a file, and an agent reading a song must be able to see
+    // them without guessing.
+    plays: {
+      sample: track.sample,
+      keymap: (track.zones ?? []).map((zone) => ({ note: zone.note, sample: zone.sample })),
+      slices: (track.slices ?? []).map((slice) => ({ start: slice.start, end: slice.end })),
+      table: track.table === undefined ? null : track.table.name,
+    },
   }));
   const perPattern: PatternDigest[] = song.patterns.map((pattern, index) => ({
     pattern: index + 1,
@@ -192,6 +224,9 @@ export function describeSong(song: Song): SongDescription {
   const { perTrack, perPattern } = countCells(song);
   return {
     title: song.title,
+    // Who made it, when the song says — null rather than '' so a caller can tell
+    // 'no credit' from 'an empty one'.
+    credits: song.credits ?? null,
     key: keyName(song.key),
     bpm: song.bpm,
     steps: patternRows(song),
@@ -200,6 +235,7 @@ export function describeSong(song: Song): SongDescription {
     tracks: song.tracks.length,
     patterns: song.patterns.length,
     notes: countSongNotes(song),
+    gestures: countGestures(song),
     lanes: song.automation.length,
     buses: song.buses.length,
     sections: song.sections.length,
@@ -223,11 +259,51 @@ export function gridText(song: Song, patternNumber: number): string {
   return lines.join('\n');
 }
 
+/**
+ * One cell, printed the way the SCRIPT would spell it — note first, then the
+ * clauses after a colon.
+ *
+ * The clauses are not decoration: `song.grid` is how an agent SEES the song it
+ * wrote, and a grid that printed `C-4` for a hit written `C-4:late2` would hide
+ * the very thing the last lines of the script said. Here they come back in the
+ * same spelling the parser reads, so a printed row can be pasted into a script
+ * and mean the same cell.
+ */
+/**
+ * How many cells carry a clause: a push, a seek, a pan or a fade.
+ *
+ * Counted from the CELL rather than from a total, because an agent that wrote
+ * twenty pushes wants to know that twenty landed — `notes` cannot answer that,
+ * and a grid line is six hundred characters of proof nobody reads.
+ */
+function countGestures(song: Song): number {
+  let count = 0;
+  for (const pattern of song.patterns) {
+    for (const row of pattern.steps) {
+      for (const cell of row) {
+        if (!cell) continue;
+        if ((cell.late !== undefined && clampLate(cell.late) > 0)
+          || (cell.start !== undefined && startFraction(cell.start) > 0)
+          || (cell.pan !== undefined && clampPan(cell.pan) !== 0)
+          || (cell.fade !== undefined && clampFade(cell.fade) > 0)) {
+          count += 1;
+        }
+      }
+    }
+  }
+  return count;
+}
+
 function cellToken(cell: Cell | undefined): string {
   if (!cell) return '.';
-  if (cell.drum) return cell.drum;
-  const notes = cellNotes(cell).map((note) => midiToNoteName(note));
-  return notes.length > 0 ? notes.join(',') : '.';
+  const notes = cell.drum ? [] : cellNotes(cell).map((note) => midiToNoteName(note));
+  const base = cell.drum ? cell.drum : (notes.length > 0 ? notes.join(',') : '.');
+  const clauses: string[] = [];
+  if (clampLate(cell.late ?? 0) > 0) clauses.push(`late${clampLate(cell.late ?? 0)}`);
+  if (cell.start !== undefined && startFraction(cell.start) > 0) clauses.push(`seek${Math.round(startFraction(cell.start) * 100)}`);
+  if (cell.pan !== undefined && clampPan(cell.pan) !== 0) clauses.push(`pan${clampPan(cell.pan)}`);
+  if (cell.fade !== undefined && clampFade(cell.fade) > 0) clauses.push(`fade${clampFade(cell.fade)}`);
+  return clauses.length > 0 ? `${base}:${clauses.join(':')}` : base;
 }
 
 /**

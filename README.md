@@ -121,5 +121,6 @@ See the [API guide](API/README.md) for the operations, transport details, and cl
 - [Cookbook](doc/04-cookbook.md) and [examples](doc/06-examples.md)
 - [Song files](doc/09-song-files.md) and [instruments](doc/10-instruments.md)
 - [Agent guide](doc/07-agent-guide.md) and [API guide](API/README.md)
+- [Parity roadmap](doc/13-parity-roadmap.md) — Furnace and Renoise, and what comes next
 
 Built with [Phaser](https://phaser.io/) and the bundled phaser-ui-canvas framework. Third-party fonts retain their own terms: Silkscreen, Alagard, Daydream, and Maze. The bundled Daydream demo and Maze fonts are identified in the app as personal-use fonts; check the authors' licenses before commercial use or further redistribution.

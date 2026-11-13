@@ -297,6 +297,55 @@ export function buildChannelChain(
  * and a note belongs to a channel. The master's own `gate` is applied where every
  * note's length is decided — see `gateFactor`.
  */
+/**
+ * A stage that leans ONE hit inside its channel: -100 hard left, 0 centre.
+ *
+ * The channel's own pan is two gains and a merger, made once per channel — a hit
+ * that moves cannot reuse it, because two hits on the same channel sound at the
+ * same moment and would fight over one setting. A panner per moved hit is cheaper
+ * than a chain and reads the same way: the channel leans the strip, and this
+ * leans the hit inside it. Centred hits get NO node at all, so a song that never
+ * asks carries exactly the graph it always did.
+ *
+ * Returns the node to build the voice into; it is already connected on.
+ */
+export function panStage(ctx: BaseAudioContext, destination: AudioNode, pan: number): AudioNode {
+  const node = ctx.createStereoPanner();
+  node.pan.value = Math.max(-1, Math.min(1, pan / 100));
+  node.connect(destination);
+  return node;
+}
+
+/**
+ * A stage that FALLS AWAY: unity until the last `percent` of the note, then a
+ * straight line to silence at the note's end.
+ *
+ * Its own node rather than a change to the synth's envelope, because a fade has
+ * to work on a SAMPLE too — a looped pad and a one-shot break ring on their own
+ * clocks, and none of them knows the note is supposed to be over. Applied to the
+ * whole voice, so a chord fades together and a stacked patch fades as one sound.
+ *
+ * `percent` is of the note's own length: 40 means the last four tenths of it are
+ * the fall. Nothing is built for a note that never fades, so an unfaded song adds
+ * no nodes at all.
+ */
+export function fadeStage(
+  ctx: BaseAudioContext,
+  destination: AudioNode,
+  at: number,
+  duration: number,
+  percent: number,
+): GainNode {
+  const node = ctx.createGain();
+  const amount = Math.max(0, Math.min(100, percent)) / 100;
+  const fall = Math.max(0.005, duration * amount);
+  const peak = Math.max(at, at + duration - fall);
+  node.gain.setValueAtTime(1, peak);
+  node.gain.linearRampToValueAtTime(0, peak + fall);
+  node.connect(destination);
+  return node;
+}
+
 export function buildMasterChain(
   ctx: BaseAudioContext,
   effects: Partial<ChannelEffects> | undefined,

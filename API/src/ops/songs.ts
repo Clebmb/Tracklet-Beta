@@ -20,6 +20,8 @@ import {
   createSong,
   parseKey,
   patternRows,
+  shareLink,
+  shareSongFromUrl,
   songFromJson,
   songToJson,
   summarizeSong,
@@ -96,6 +98,32 @@ export const songOperations: ApiOperation[] = [
     run: (input) => {
       const song = songFromInput(input) ?? createSong();
       return ok(describeSong(song));
+    },
+  },
+  {
+    name: 'song.link',
+    title: 'Make a link that carries the song',
+    summary: 'The song as a URL you can paste: the script lives in the link\'s own `#s=` fragment, so no server holds it and nothing is uploaded. Pass `link` instead of `song` to read one back — the script, ready for `script.apply`.',
+    category: 'song',
+    example: { base: 'https://example.com/tracklet/' },
+    input: schema({
+      song: field('object', 'The song to share. Omit to share a blank song.'),
+      songJson: field('string', 'The same, as the text of a .json song file.'),
+      base: field('string', 'The page the link opens on. Default: https://tracklet.local/.'),
+      link: field('string', 'A shared URL or bare `#s=` fragment to READ instead of writing one.'),
+    }),
+    run: (input) => {
+      const link = maybeStr(input, 'link');
+      if (link !== null) {
+        const read = shareSongFromUrl(link);
+        if (!read.ok) refuse('invalid_input', read.reason);
+        return ok({ script: read.script });
+      }
+      const song = songFromInput(input) ?? createSong();
+      const base = maybeStr(input, 'base') ?? 'https://tracklet.local/';
+      const made = shareLink(song, base);
+      if (!made.ok) refuse('invalid_input', made.reason);
+      return ok({ url: made.url, characters: made.characters });
     },
   },
   {

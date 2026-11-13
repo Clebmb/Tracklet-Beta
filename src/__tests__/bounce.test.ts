@@ -8,6 +8,7 @@ import {
   bounceLabel,
   bounceMarkFor,
   bounceMarkStatus,
+  nextLoopStep,
   bounceReaches,
   bounceScript,
   bounceSteps,
@@ -238,10 +239,28 @@ describe('the L mark in F3', () => {
   });
 
   it('says what it did, in one line, every press', () => {
-    expect(bounceMarkStatus(NO_BOUNCE, 8)).toBe('LOOP OFF - THE WHOLE SONG EXPORTS.');
+    expect(bounceMarkStatus(NO_BOUNCE, 8)).toBe('LOOP OFF - THE WHOLE SONG PLAYS AND EXPORTS.');
     expect(bounceMarkStatus({ kind: 'start', bar: 3 }, 8)).toContain('LOOP STARTS AT BAR 3');
     const region = markBounce(markBounce(NO_BOUNCE, 3), 7);
-    expect(bounceMarkStatus(region, 8)).toBe('LOOP BARS 3-7 - PRESS L ON BAR 7 TO TAKE IT OFF.');
+    expect(bounceMarkStatus(region, 8)).toBe('LOOP BARS 3-7 - PLAYS AND EXPORTS THESE BARS; PRESS L ON BAR 7 TO TAKE IT OFF.');
+  });
+
+  it('steps through the marked bars and wraps inside them', () => {
+    // The whole song is the same arithmetic it always was: step 31 of 32 wraps.
+    expect(nextLoopStep(0, 0, 32)).toBe(1);
+    expect(nextLoopStep(31, 0, 32)).toBe(0);
+    // A region starts at its first bar and ends at the step before its last, so
+    // bar 3 to bar 4 of a 16-step bar is steps 32..63 and wraps at 64.
+    expect(nextLoopStep(32, 32, 64)).toBe(33);
+    expect(nextLoopStep(63, 32, 64)).toBe(32);
+    // A one-step region holds rather than walking out of itself.
+    expect(nextLoopStep(4, 4, 4)).toBe(4);
+  });
+
+  it('turns a marked region into the steps the transport loops', () => {
+    const four = song(FOUR_BARS);
+    expect(bounceSteps(four, { from: 2, to: 3 })).toEqual({ first: 16, last: 48 });
+    expect(bounceSteps(four, null)).toEqual({ first: 0, last: 64 });
   });
 
   it('goes back and forth from a settings value', () => {

@@ -88,6 +88,24 @@ export function bounceSteps(song: Song, range: BounceRange | null | undefined): 
   return { first: (fitted.from - 1) * rows, last: fitted.to * rows };
 }
 
+/**
+ * The step that follows one, inside a loop span.
+ *
+ * Half-open, like `bounceSteps`: `first` is where the loop begins and `last` is
+ * where it ends, so the step before `last` is the last one that sounds. Wrapping
+ * at `last` rather than at the song's own length is the whole of "play the region
+ * back": `L` in `F3` has always marked the bars an EXPORT renders, and a person
+ * fixing the second half of a chorus wants those same bars to play while they
+ * work. One function rather than arithmetic in the scheduler, so a region that
+ * loops and a region that exports cannot mean different bars.
+ */
+export function nextLoopStep(step: number, first: number, last: number): number {
+  const next = Math.max(0, Math.round(step)) + 1;
+  const from = Math.max(0, Math.round(first));
+  const to = Math.max(from + 1, Math.round(last));
+  return next >= to ? from : next;
+}
+
 /** How many bars a region covers, once fitted. */
 export function bounceBars(range: BounceRange | null | undefined, bars: number): number {
   if (!range) return Math.max(1, Math.round(bars));
@@ -159,7 +177,7 @@ export function bounceMarkFor(range: BounceRange | null): BounceMark {
 
 /** One line for the `F3` status well, in the app's own voice. */
 export function bounceMarkStatus(mark: BounceMark, bars: number): string {
-  if (mark.kind === 'none') return 'LOOP OFF - THE WHOLE SONG EXPORTS.';
+  if (mark.kind === 'none') return 'LOOP OFF - THE WHOLE SONG PLAYS AND EXPORTS.';
   if (mark.kind === 'start') return `LOOP STARTS AT BAR ${mark.bar} - PRESS L WHERE IT ENDS.`;
-  return `LOOP ${bounceLabel(mark.range, bars)} - PRESS L ON BAR ${fitBounce(mark.range, bars).to} TO TAKE IT OFF.`;
+  return `LOOP ${bounceLabel(mark.range, bars)} - PLAYS AND EXPORTS THESE BARS; PRESS L ON BAR ${fitBounce(mark.range, bars).to} TO TAKE IT OFF.`;
 }

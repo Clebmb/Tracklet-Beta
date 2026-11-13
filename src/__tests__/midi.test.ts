@@ -271,14 +271,15 @@ describe('mapping a MIDI file to a song', () => {
   });
 
   it('counts the notes that did not fit rather than losing them silently', () => {
-    // 64 bars is 1024 steps; a note at tick 120 * 1200 is past that.
+    // 128 patterns of 64 steps is 8192 steps — 245,760 ticks at this file's
+    // 120 PPQ. A note at tick 120 * 4000 is well past that.
     const result = songFromMidi(file(track(
       on(0, 0, 60, 100), off(120, 0, 60),
-      on(120 * 1200, 0, 62, 100), off(120, 0, 62),
+      on(120 * 4000, 0, 62, 100), off(120, 0, 62),
     )));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.summary.patterns).toBeLessThanOrEqual(64);
+    expect(result.summary.patterns).toBeLessThanOrEqual(128);
     expect(result.summary.dropped).toBe(1);
     expect(result.summary.notes).toBe(1);
   });

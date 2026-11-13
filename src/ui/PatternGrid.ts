@@ -8,7 +8,7 @@ import {
   inside,
   type Rect,
 } from 'phaser-ui-canvas';
-import { cellText, ROWS_PER_BEAT, type Cell, type Pattern } from '../model/song';
+import { cellText, ROWS_PER_BEAT, TRACKS_PER_BANK, type Cell, type Pattern } from '../model/song';
 import { trackColor } from './trackColor';
 import {
   DRUM_LANES,
@@ -21,6 +21,7 @@ import {
   laneLabels,
 } from './stepView';
 import { overviewDensity, overviewMarkH, overviewRowAt, overviewYAt } from './overview';
+import type { Block } from '../model/selection';
 
 /**
  * PatternGrid — the pattern editor: a row-number gutter, one column per track,
@@ -78,6 +79,16 @@ export interface PatternGridHandlers {
   onPick?: (row: number, track: number) => void;
   /** A cell was right-clicked (or shift-clicked): clear it, the mouse's Backspace. */
   onSecondaryPick?: (row: number, track: number) => void;
+  /**
+   * The pointer was DRAGGED across cells: the corner it started on, and the one
+   * it is over now.
+   *
+   * A drag is how a mouse asks for a block. It is reported as two corners rather
+   * than as a finished rectangle so the grid can be redrawn while the hand is
+   * still moving — the highlight grows with the drag, which is the whole of what
+   * makes a drag feel like a drag.
+   */
+  onDragSelect?: (anchor: { row: number; track: number }, head: { row: number; track: number }) => void;
   /**
    * A LANE was clicked in the drum view. `lane` is an index into `DRUM_LANES`.
    *
@@ -162,6 +173,7 @@ export class PatternGrid {
   private readonly bg: Phaser.GameObjects.Graphics;
   private readonly playGfx: Phaser.GameObjects.Graphics;
   private readonly hoverGfx: Phaser.GameObjects.Graphics;
+  private readonly selectionGfx: Phaser.GameObjects.Graphics;
   private readonly cursorGfx: Phaser.GameObjects.Graphics;
   private readonly barGfx: Phaser.GameObjects.Graphics;
   private readonly overlayGfx: Phaser.GameObjects.Graphics;
@@ -175,9 +187,38 @@ export class PatternGrid {
   private trackNames: readonly string[];
   private rowsPerBeat: number;
   private cursor = { row: 0, track: 0 };
+  /**
+   * Which bank of `TRACKS_PER_BANK` channels is on screen: 0 for the first eight,
+   * 1 for the next eight.
+   *
+   * A song may hold sixteen channels (`MAX_TRACKS`) and the grid was drawn for
+   * eight, so the extra channels are a VIEW away rather than a squeeze: the cells
+   * keep their width and the panel shows one bank at a time. The cursor follows
+   * the selection, so asking for channel 12 brings its bank on screen without a
+   * second gesture — `setBank` is there for the key that flips it directly.
+   */
+  private bank = 0;
   private playhead = -1;
   private hovered: { row: number; track: number } | null = null;
   private emptyShown = false;
+  /**
+   * The block the app has selected, in grid coordinates, or null.
+   *
+   * Held here as well as in the scene because the grid has to KNOW it to draw
+   * it, and pushed in with `setSelection` rather than read from the song: a view
+   * that reached into the app's state for this would be a view that could show a
+   * selection the app does not have.
+   */
+  private selection: Block | null = null;
+  /**
+   * Where the pointer went down, while it is still down.
+   *
+   * A click and a drag start the same way, so the anchor is remembered on the
+   * press and only reported once the pointer has moved to another cell — a click
+   * that does not travel stays a click, which is what places the cursor and
+   * writes a note.
+   */
+  private dragFrom: { row: number; track: number } | null = null;
   /**
    * Whether the panel shows the drum LANES rather than one column per channel.
    *
@@ -231,6 +272,7 @@ export class PatternGrid {
     this.bg = scene.add.graphics();
     this.playGfx = scene.add.graphics();
     this.hoverGfx = scene.add.graphics();
+    this.selectionGfx = scene.add.graphics();
     this.cursorGfx = scene.add.graphics();
     this.barGfx = scene.add.graphics();
     this.texts = scene.add.container(0, 0);
@@ -238,7 +280,8 @@ export class PatternGrid {
     this.overlayGfx = scene.add.graphics();
     this.overlay.add(this.overlayGfx);
     this.container.add([
-      this.bg, this.playGfx, this.hoverGfx, this.cursorGfx, this.barGfx, this.texts, this.overlay,
+      this.bg, this.playGfx, this.hoverGfx, this.selectionGfx, this.cursorGfx, this.barGfx,
+      this.texts, this.overlay,
     ]);
 
     // One interactive zone for the whole grid: a click or a hover is mapped to
@@ -263,12 +306,28 @@ export class PatternGrid {
         return;
       }
       if (secondary) this.handlers.onSecondaryPick?.(cell.row, cell.track);
-      else this.handlers.onPick?.(cell.row, cell.track);
+      else {
+        // A press that travels becomes a block; one that does not is the click it
+        // has always been. The drum view has no block to drag (its columns are
+        // lanes of one channel), so it keeps the plain pick.
+        this.dragFrom = this.drumView ? null : { row: cell.row, track: cell.track };
+        this.handlers.onPick?.(cell.row, cell.track);
+      }
     });
     this.zone.on('pointermove', (p: Phaser.Input.Pointer) => {
       const cell = this.cellAtLocal(p.x - this.rect.x, p.y - this.rect.y);
       this.setHover(cell);
+      // A release OUTSIDE the grid is not seen by its zone, so the next move over
+      // it is what tells us the hand has let go.
+      if (!p.isDown) { this.dragFrom = null; return; }
+      const from = this.dragFrom;
+      if (!from || !cell) return;
+      if (cell.row === from.row && cell.track === from.track) return;
+      this.handlers.onDragSelect?.(from, cell);
     });
+    // The release ends the drag, so the NEXT press is a fresh click rather than a
+    // continuation of the block the last drag made.
+    this.zone.on('pointerup', () => { this.dragFrom = null; });
     this.zone.on('pointerout', () => this.setHover(null));
     this.container.add(this.zone);
 
@@ -315,11 +374,21 @@ export class PatternGrid {
   private get maxTop(): number { return Math.max(0, this.rows - this.rowsShown); }
   /** Row height in pixels: the same for every row in the window. */
   private get rowH(): number { return (this.rect.height - HEAD_H) / this.rowsShown; }
-  private get colW(): number { return (this.rect.width - GUTTER_W) / Math.max(1, this.columns); }
+  /** The bank's left edge: the first channel this panel draws. */
+  private get firstCol(): number { return this.drumView ? 0 : this.bank * TRACKS_PER_BANK; }
+  /** How many columns are drawn ACROSS the width: a bank, or all of a shorter song. */
+  private get shownCols(): number {
+    return Math.max(1, Math.min(this.columns - this.firstCol, TRACKS_PER_BANK));
+  }
+  private get colW(): number { return (this.rect.width - GUTTER_W) / this.shownCols; }
   /** Digits needed for the largest row number, so the gutter stays aligned. */
   private get gutterDigits(): number { return Math.max(2, String(Math.max(0, this.rows - 1)).length); }
 
-  private colX(track: number): number { return GUTTER_W + Math.round(track * this.colW); }
+  private colX(track: number): number { return GUTTER_W + Math.round((track - this.firstCol) * this.colW); }
+  /** True when the column is inside the bank on screen. */
+  private inBank(track: number): boolean {
+    return track >= this.firstCol && track < this.firstCol + this.shownCols;
+  }
   /** The overview strip, in container-local coordinates. */
   private barRectLocal(): { x: number; y: number; height: number } {
     return { x: this.rect.width - BAR_W, y: HEAD_H + 1, height: this.rect.height - HEAD_H - 2 };
@@ -335,9 +404,11 @@ export class PatternGrid {
       return null;
     }
     const row = this.top + Math.floor((y - HEAD_H) / this.rowH);
-    const track = Math.floor((x - GUTTER_W) / this.colW);
+    // The pointer is over the BANK, so the column it lands in is the bank's own
+    // index plus its left edge.
+    const track = this.firstCol + Math.floor((x - GUTTER_W) / this.colW);
     if (row < 0 || row >= this.rows) return null;
-    if (track < 0 || track >= this.columns) return null;
+    if (!this.inBank(track) || track >= this.columns) return null;
     return { row, track };
   }
 
@@ -402,8 +473,29 @@ export class PatternGrid {
     // rather than a band moved across one.
     const rekit = this.drumView && track !== this.cursor.track;
     this.cursor = { row, track };
-    if (scrolled || rekit) this.repaint(scrolled);
+    // A cursor outside the bank on screen brings its bank with it, so nothing can
+    // move the cursor somewhere the eye cannot follow.
+    const rebank = !this.drumView && !this.inBank(track);
+    if (rebank) this.bank = Math.max(0, Math.floor(track / TRACKS_PER_BANK));
+    if (scrolled || rekit || rebank) this.repaint(scrolled || rebank);
     else this.paintCursor();
+  }
+
+  /**
+   * Draw (or take away) the app's selection. Pass null to clear it.
+   *
+   * The grid only draws what it is told: which two corners the app selected is a
+   * decision it made, and this is the view catching up rather than deciding.
+   */
+  setSelection(block: Block | null): void {
+    const same = block === null
+      ? this.selection === null
+      : this.selection !== null
+        && this.selection.top === block.top && this.selection.bottom === block.bottom
+        && this.selection.left === block.left && this.selection.right === block.right;
+    if (same) return;
+    this.selection = block;
+    this.paintSelection();
   }
 
   /** Move the playback band, or pass -1 to hide it. Follows the playhead. */
@@ -478,6 +570,7 @@ export class PatternGrid {
     this.paintPlayhead();
     this.paintBar();
     this.paintHover();
+    this.paintSelection();
     this.paintCursor();
     this.paintOverlay();
     this.overlay.setVisible(this.emptyShown);
@@ -523,7 +616,7 @@ export class PatternGrid {
 
     // Column seams.
     g.fillStyle(c.stone, 0.22);
-    for (let t = 1; t < this.columns; t++) {
+    for (let t = this.firstCol + 1; t < this.firstCol + this.shownCols && t < this.columns; t++) {
       g.fillRect(this.colX(t), HEAD_H, 1, this.rect.height - HEAD_H);
     }
 
@@ -549,6 +642,7 @@ export class PatternGrid {
     const c = activeColors();
     const labels = this.drumView ? laneLabels() : null;
     for (let t = 0; t < this.columns; t++) {
+      if (!labels && !this.inBank(t)) continue;
       const name = labels ? labels[t] : this.trackNames[t] ?? `TRK ${t + 1}`;
       const max = Math.max(1, Math.floor((this.colW - CELL_PAD * 2) / 5));
       const label = name.length > max ? name.slice(0, max) : name;
@@ -650,6 +744,16 @@ export class PatternGrid {
     const cell = this.cellIn(row, col);
     const text = slot.cells[col];
     if (!text) return;
+    // The pool holds every channel; only the bank on screen is drawn. A cell on
+    // the other bank keeps its text and simply goes away.
+    const shown = this.drumView || this.inBank(col);
+    text.setVisible(shown);
+    if (!shown) return;
+    // The pool's cells are positioned once when they are built, and a BANK FLIP
+    // moves every column without rebuilding them — so the x is re-pinned here,
+    // where the cell is drawn. Setting an unchanged x costs a comparison.
+    const x = this.colX(col) + CELL_PAD;
+    if (text.x !== x) text.setX(x);
     const value = cell === null
       ? EMPTY_STEP_TEXT
       : this.drumView ? drumCellText(cell, col) : cellText(cell);
@@ -778,6 +882,39 @@ export class PatternGrid {
     g.fillRect(GUTTER_W, y, this.rect.width - GUTTER_W, Math.max(1, h - 1));
   }
 
+  /**
+   * The selected block, as a wash with a border.
+   *
+   * Quiet on purpose: the cursor already owns the loud highlight, and a block that
+   * shouted would bury the notes inside it — the thing you selected in order to
+   * look at. The border is the part that has to read, because it is what tells you
+   * where the block ENDS; the wash is only there so a two-row selection is not
+   * mistaken for one.
+   */
+  private paintSelection(): void {
+    const c = activeColors();
+    const g = this.selectionGfx;
+    g.clear();
+    const block = this.selection;
+    if (!block) return;
+    const top = Math.max(block.top, this.top);
+    const bottom = Math.min(block.bottom, this.top + this.rowsShown - 1);
+    if (bottom < top || this.columns <= 0) return;
+    // A selection is clipped to the bank: a block that began on channel 2 and
+    // ended on channel 12 paints only the part of itself this panel can show.
+    const left = Math.max(this.drumView ? 0 : this.firstCol, Math.min(block.left, this.columns - 1));
+    const right = Math.min(this.drumView ? this.columns - 1 : this.firstCol + this.shownCols - 1, Math.min(block.right, this.columns - 1));
+    if (right < left) return;
+    const x = this.colX(left);
+    const y = this.rowY(top);
+    const w = this.colX(right + 1) - x;
+    const h = this.rowY(bottom + 1) - y;
+    g.fillStyle(c.ward, 0.12);
+    g.fillRect(x, y, w, Math.max(1, h - 1));
+    g.lineStyle(1, c.ward, 0.45);
+    g.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, h - 2));
+  }
+
   private paintCursor(): void {
     const c = activeColors();
     const g = this.cursorGfx;
@@ -785,6 +922,8 @@ export class PatternGrid {
     const { row, track } = this.cursor;
     if (row < 0 || row >= this.rows || track < 0 || track >= this.trackCount) return;
     if (!this.onScreen(row)) return;
+    // A cursor on the other bank is not drawn here: it is not on this panel.
+    if (!this.drumView && !this.inBank(track)) return;
     // In the drum view the cursor is a whole ROW: the four lanes are one channel's
     // kit, and the edit cursor is not on a lane, it is on the step — a band across
     // the row is the honest picture of that, and it is also what a drum machine

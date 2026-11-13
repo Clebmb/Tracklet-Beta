@@ -8,6 +8,7 @@ import {
   ensurePattern,
   isOrderEmpty,
   MAX_ORDER,
+  MAX_PATTERNS,
   normalizeOrder,
   orderLabel,
   patternRows,
@@ -104,7 +105,7 @@ describe('adding, removing and repointing bars', () => {
   it('clamps a slot past the pattern ceiling rather than refusing it', () => {
     const song = songWithOrder([1, 1]);
     setOrderPattern(song, 0, 9999);
-    expect(song.order[0]).toBe(64);
+    expect(song.order[0]).toBe(MAX_PATTERNS);
   });
 
   it('holds a ceiling, so a generated song cannot grow without end', () => {

@@ -34,6 +34,7 @@
 import {
   arrangementBars,
   cellNotes,
+  cellStop,
   defaultPad,
   emptyCell,
   INITIAL_PADS,
@@ -43,6 +44,7 @@ import {
   patternRows,
   resizeRow,
   sameBusName,
+  laneClock,
   sameLane,
   sameScene,
   songToJson,
@@ -94,6 +96,7 @@ function serialized(song: Song): string | null {
 
 /** Do two cells hold the same music — notes, drum, and the per-note feel? */
 function sameCell(a: Cell, b: Cell): boolean {
+  if (a.gesture !== b.gesture) return false;
   if (a.drum !== b.drum) return false;
   if (a.velocity !== b.velocity || a.slide !== b.slide || a.stutter !== b.stutter) return false;
   const an = cellNotes(a);
@@ -355,6 +358,10 @@ function automationEdits(
       to: now.to,
       startBar: now.startBar,
       endBar: now.endBar,
+      // The clock travels with the lane, or a diff would replay a note-clock lane
+      // as a bar lane and quietly change what it means. Written only when it is
+      // the OTHER clock, so a bar lane's edit is the edit it always was.
+      ...(laneClock(now) === 'note' ? { clock: 'note' } : {}),
     });
   }
   if (after.length === 0 && before.length > 0) {
@@ -439,6 +446,21 @@ export function diffSongs(before: Song, after: Song): SongDiff {
     // A recording is one more name a channel can carry; an absent one is written
     // as an empty string, which is how `sample.set` says "leave the one it has".
     if ((was.sample ?? '') !== (now.sample ?? '')) edit.sample = now.sample ?? '';
+    // A KEYMAP, a CHOP and a TABLE are each a whole thing about a channel, so each
+    // travels whole: a diff that dropped one would replay into a channel that plays
+    // the wrong recording in the register it named, or the whole file on every
+    // note, or the bank entry instead of the spectrum it wrote. Compared as the
+    // model holds them (tidied, so the order is canonical), and written as an empty
+    // list or `null` when the thing went away.
+    if (JSON.stringify(was.zones ?? []) !== JSON.stringify(now.zones ?? [])) {
+      edit.zones = (now.zones ?? []).map((zone) => ({ note: zone.note, sample: zone.sample }));
+    }
+    if (JSON.stringify(was.slices ?? []) !== JSON.stringify(now.slices ?? [])) {
+      edit.slices = (now.slices ?? []).map((slice) => ({ start: slice.start, end: slice.end }));
+    }
+    if (JSON.stringify(was.table ?? null) !== JSON.stringify(now.table ?? null)) {
+      edit.table = now.table === undefined ? null : { name: now.table.name, harmonics: [...now.table.harmonics] };
+    }
     if (Object.keys(edit).length > 2) edits.push(edit);
   }
 
@@ -464,6 +486,14 @@ export function diffSongs(before: Song, after: Song): SongDiff {
         const was = before.patterns[patternIndex]?.steps[rowIndex]?.[trackIndex] ?? emptyCell();
         if (sameCell(was, cell)) return;
         const at = { pattern: patternIndex + 1, row: rowIndex, track: trackIndex + 1 };
+        // A STOP is its own edit: `cell.set` with a gesture, because the
+        // vocabulary has no `cell.stop` and a stop IS a cell — writing one says
+        // the whole step, the way writing a drum does.
+        const stop = cellStop(cell);
+        if (stop !== null) {
+          edits.push({ op: 'cell.set', ...at, gesture: stop });
+          return;
+        }
         const feelMoved = was.velocity !== cell.velocity || was.slide !== cell.slide || was.stutter !== cell.stutter;
         if (cell.note === null && cell.drum === null) {
           // An emptied step whose FEEL also moved needs `cell.set` with an empty

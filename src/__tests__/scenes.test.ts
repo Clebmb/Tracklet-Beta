@@ -4,6 +4,7 @@ import {
   clampSceneClip,
   clampSceneClips,
   createSong,
+  MAX_PATTERNS,
   MAX_SCENES,
   MAX_SCENE_NAME,
   renameScene,
@@ -62,7 +63,7 @@ describe('a clip is a pattern number, or silence', () => {
 
   it('clamps a real pattern number into the song\'s range', () => {
     expect(clampSceneClip(1)).toBe(1);
-    expect(clampSceneClip(99)).toBe(64);
+    expect(clampSceneClip(9999)).toBe(MAX_PATTERNS);
     expect(clampSceneClip(2.4)).toBe(2);
   });
 

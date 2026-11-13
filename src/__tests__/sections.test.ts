@@ -100,7 +100,7 @@ describe('a section is a name for a group of bars', () => {
   });
 
   it('clamps the bars a section may hold, and cuts it to what a song plays', () => {
-    expect(clampSectionBars([1, 0, 999])).toEqual([1, 1, 64]);
+    expect(clampSectionBars([1, 0, 999])).toEqual([1, 1, 128]);
     expect(clampSectionBars([1, Number.NaN, 2])).toEqual([1, 2]);
     expect(clampSectionBars(Array.from({ length: MAX_ORDER + 5 }, () => 1))).toHaveLength(MAX_ORDER);
   });
@@ -114,7 +114,7 @@ describe('a section is a name for a group of bars', () => {
     ]);
     expect(tidied).toEqual([{ name: 'VERSE', bars: [3, 3] }]);
     expect(tidySections(Array.from({ length: MAX_SECTIONS + 4 }, (_, i) => section(`S${i}`)))).toHaveLength(MAX_SECTIONS);
-    expect(tidySection(section('chorus', [0, 200]))).toEqual({ name: 'CHORUS', bars: [1, 64] });
+    expect(tidySection(section('chorus', [0, 200]))).toEqual({ name: 'CHORUS', bars: [1, 128] });
   });
 
   it('adds a section, and REPLACES one whose name it already has', () => {
@@ -310,11 +310,11 @@ describe('the words', () => {
   it('refuses a bar that is not a pattern number', () => {
     const zero = run('section VERSE 0 1');
     expect(zero.ok).toBe(false);
-    if (!zero.ok) expect(zero.errors[0].message).toContain('takes pattern numbers 1..64');
+    if (!zero.ok) expect(zero.errors[0].message).toContain('takes pattern numbers 1..128');
 
     const note = run('section VERSE A-4 C-5');
     expect(note.ok).toBe(false);
-    if (!note.ok) expect(note.errors[0].message).toContain('takes pattern numbers 1..64');
+    if (!note.ok) expect(note.errors[0].message).toContain('takes pattern numbers 1..128');
   });
 
   it(`stops at ${MAX_SECTIONS} names, and says so on the one after`, () => {
@@ -578,7 +578,7 @@ describe('the file', () => {
     expect(tidy.ok).toBe(true);
     if (!tidy.ok) return;
     expect(tidy.song.sections[0].name).toHaveLength(MAX_SECTION_NAME);
-    expect(tidy.song.sections[0].bars).toEqual([1, 64]);
+    expect(tidy.song.sections[0].bars).toEqual([1, 128]);
   });
 
   it('refuses a section with no name, no bars, or a bar that is not a number', () => {

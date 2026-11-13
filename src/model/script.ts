@@ -45,6 +45,7 @@ import {
   LOUDNESS_OFF_WORD,
   LOUDNESS_WORD,
 } from './loudness';
+import { MAX_EDIT_STEP, MIN_EDIT_STEP } from './editor';
 import { baseMidiForOctave, clampMidi, MIDI_MAX, MIDI_MIN } from './notes';
 import {
   DEFAULT_PROGRESSION_HOLD,
@@ -75,9 +76,17 @@ import {
   MIN_OCTAVE_SHIFT,
   MIN_ROLL_HITS,
   MIN_ROW_REPEAT,
+  FILL_WORD,
+  INTERPOLATE_WORD,
+  MAX_TRANSPOSE,
+  MIN_TRANSPOSE,
   REVERSE_WORD,
   ROLL_WORD,
   ROW_RANGE_WORD,
+  TRANSPOSE_WORD,
+  fillRange,
+  interpolateRange,
+  transposeRange,
   ROW_TRANSFORM_WORDS,
   repeatProblem,
   repeatRange,
@@ -168,10 +177,13 @@ import {
 import {
   AUTOMATION_TARGET_WORDS,
   MAX_AUTOMATION_LANES,
+  MAX_NOTE_CLOCK_STEPS,
   automationTargetInfo,
   clampAutomationTrack,
   isAutomationTarget,
+  supportsNoteClock,
   withAutomationLane,
+  type AutomationClock,
   type AutomationTargetId,
 } from './automation';
 import {
@@ -275,6 +287,12 @@ import {
   type DrumPad,
 } from './machine';
 import { NO_SAMPLE_WORD, sameSampleName, sampleNameProblem, tidySampleName } from './sample';
+import { noteNameToMidi } from './notes';
+import { clampZoneNote, MAX_ZONE_NOTE, MIN_ZONE_NOTE, tidyZones } from './zone';
+import { clampSlice, tidySlices } from './slice';
+import { clampFade, clampLate, MAX_CREDITS, MAX_FADE, MAX_LATE, MAX_START, startFraction, tidyCredits } from './song';
+import { clampHarmonic, MAX_HARMONICS, MAX_TABLE_NAME, tableNameProblem, tidyTable, type WaveTable } from './wavetable';
+
 import { FILTER_SHAPES, shapeFromName, shapeNames, type FilterShape } from './shape';
 import {
   MAX_TAKE_SECONDS,
@@ -356,7 +374,10 @@ import {
   patternRows,
   setCellDrum,
   setCellNotes,
+  setCellStop,
+  stopFromName,
   setOrder,
+  setPatternLength,
   setPatternRows,
   setTrackCount,
   setTrackFx,
@@ -375,6 +396,7 @@ import {
   usedTracks,
   type ChannelEffects,
   type Song,
+  type StopId,
   type TrackEffectId,
 } from './song';
 
@@ -390,11 +412,40 @@ export const SCRIPT_KEYWORDS: readonly string[] = [
   // than merging into it, so a song's meaning still never depends on what was on
   // screen. See `model/genre.ts` for why the skeletons are scripts.
   'start',
-  'song', 'key', 'tempo', 'octave', 'beat', 'steps',
+  // How far the cursor steps after a note. A SESSION setting like `octave` — it
+  // says how you are TYPING, not what the song is — and it sits next to the
+  // octave for that reason: the two are the pair of hands-off settings a person
+  // sets once and forgets.
+  'song', 'credits', 'key', 'tempo', 'octave', 'advance', 'beat', 'steps',
   // The two SUGAR words over `steps`/`beat`: they resolve a note value into that
   // pair and write it, so everything below them keeps seeing two plain numbers.
   'grid', 'meter',
   'tuning', 'swing', 'groove', 'speed',
+  // A channel's KEYMAP: which recording plays from which note upward. It sits with
+  // the channel's sound for `sample`'s reason — it says what the channel plays.
+  'zone',
+  // The pieces of a channel's recording — the other half of what a chop needs:
+  // `zone` says WHICH recording, `slice` says where its cuts are.
+  'slice',
+  // And the shape that channel plays: `table` writes a wavetable of your own, the
+  // one sound here that used to be a fixed bank.
+  'table',
+  // The PUSH: one hit that lands behind its step, in ticks of a sixth of a
+  // step. It sits with `zone`/`slice`/`table` because it is one cell's own
+  // business rather than the song's — and it is a STATEMENT rather than a
+  // suffix on a note (`C-4:late2`) so the note tokeniser keeps saying one thing.
+  'push',
+  // The SEEK: where in its own sample a hit begins. Beside `push` because the two
+  // are the clauses about one hit's own time and body — one says when it lands,
+  // the other where it starts.
+  'seek',
+  // The PAN: which way ONE hit leans. Beside `seek` because the three are the
+  // clauses about a single hit's own body — when it lands, where it begins, and
+  // where it sits.
+  'pan',
+  // The FADE: how a note LEAVES rather than how long it lasts. Beside `pan`
+  // because the four are one hit's own body.
+  'fade',
   // The DRUM KIT, which is the other half of what a song sounds like: `groove`
   // says how the notes are played, and `kit` says what the drums ARE. It sits
   // here because it is a property of the record rather than of one part.
@@ -437,6 +488,13 @@ export const SCRIPT_KEYWORDS: readonly string[] = [
   // written by a script, read by the two audio exports, and never carried by a
   // file, like `theme` and `solo` beside it.
   'export',
+  // THE SONG THAT ARRIVES WHOLE — `pack save` writes the one file an agent can
+  // hand over: the song, the samples it names and the plugins it pinned, zipped.
+  // It sits beside `export` because it is the other half of "get this out of the
+  // app": `export` renders the sound, and `pack` carries the thing that makes
+  // the sound. A side effect on a file system rather than song data, so it travels
+  // out in `settings` like `sample load` and no file carries it.
+  'pack',
   // WHICH SCREEN IS SHOWING — the one word a script needs to drive the tabs it
   // just wrote into. A view setting like `theme`, not song data: a file never
   // carries it, so opening someone's song cannot move your screen, and the
@@ -599,6 +657,24 @@ export interface ScriptSettings {
    * octave you are playing in — which is the whole point of being able to say it.
    */
   octave?: number;
+  /**
+   * How many rows the cursor moves after a note is written, 0..8. Absent when the
+   * script said nothing about it.
+   *
+   * The other half of the octave: both say how you are TYPING rather than what
+   * the song is, so both travel beside the song and no file carries either.
+   */
+  advance?: number;
+  /**
+   * Whether the script asked for the song to be written out as a PACK.
+   *
+   * A side effect rather than a value — the file lands in the browser's downloads
+   * — so it is a flag the app acts on once and never stores. The pack is the
+   * bundle the FILE menu already writes: the song's JSON, every sample it names
+   * as a `.wav`, and every plugin it pinned. Absent when the script said nothing,
+   * which is why applying a script never writes a file by accident.
+   */
+  packSave?: boolean;
   /**
    * The channels to solo, by 1-based number. Absent when the script said nothing
    * about solo.
@@ -811,9 +887,12 @@ type FollowerKind = 'chords' | 'roots';
 type ScriptCommand =
   | { kind: 'new'; line: number }
   | { kind: 'title'; line: number; title: string }
+  /** `credits ...`: who made the song, or `undefined` to take it off. */
+  | { kind: 'credits'; line: number; text: string | undefined }
   | { kind: 'key'; line: number; key: SongKey }
   | { kind: 'tempo'; line: number; bpm: number }
-  | { kind: 'steps'; line: number; rows: number }
+  /** `steps N` for the song, or `steps N pattern P` for one pattern. */
+  | { kind: 'steps'; line: number; rows: number; pattern?: number }
   | { kind: 'beat'; line: number; stepsPerBeat: number }
   // The two sugar words carry the RESOLVED pair rather than their own arguments:
   // they are a way of saying `steps`/`beat`, so by the time a command exists the
@@ -840,6 +919,35 @@ type ScriptCommand =
    */
   | { kind: 'master'; line: number; effects: Partial<ChannelEffects> }
   /**
+   * `zone 1 C-4 PIANO_HI`: which recording a channel plays from a note upward.
+   *
+   * One boundary at a time rather than a table, so a keymap reads like a list of
+   * sentences and two lines in any order mean the same keyboard. `sample: null`
+   * is the `clear` form, which empties the map.
+   */
+  | { kind: 'zone'; line: number; track: number; note: number; sample: string | null }
+  /** One cell, pushed behind its step: pattern, row, channel, ticks. */
+  | { kind: 'push'; line: number; pattern: number; row: number; track: number; late: number }
+  /** One cell, begun partway into its sample: pattern, row, channel, percent. */
+  | { kind: 'seek'; line: number; pattern: number; row: number; track: number; start: number }
+  /** One cell, leaned in the field: pattern, row, channel, -100..100. */
+  | { kind: 'pan'; line: number; pattern: number; row: number; track: number; pan: number }
+  /** One cell, falling away through part of its length: pattern, row, channel, %. */
+  | { kind: 'fade'; line: number; pattern: number; row: number; track: number; fade: number }
+  /**
+   * `slice 1 0 0.42`: one piece of a channel's recording, in seconds.
+   *
+   * `start: -1` is the `clear` form, which plays the recording whole again.
+   */
+  | { kind: 'slice'; line: number; track: number; start: number; end: number }
+  /**
+   * `table 1 ODD 1 0 0.5`: a WAVETABLE of the channel's own.
+   *
+   * The name, then the harmonics from the fundamental upward. `table: null` is the
+   * `clear` form, which puts the channel back on the chip bank its `duty` picks.
+   */
+  | { kind: 'table'; line: number; track: number; table: WaveTable | null }
+  /**
    * `automate 2 bright 15 95 bars 8 to 15`: move one value over a range of bars.
    *
    * One statement rather than a new keyword per knob, because a lane is a SHAPE
@@ -850,6 +958,8 @@ type ScriptCommand =
   | {
       kind: 'automate'; line: number; track: number; target: AutomationTargetId;
       from: number; to: number; startBar: number; endBar: number;
+      /** Which clock the two range numbers are counted in. Absent means `bars`. */
+      clock?: AutomationClock;
     }
   /**
    * `section VERSE 1 1 2 1`: a NAME for a group of bars.
@@ -878,6 +988,8 @@ type ScriptCommand =
    */
   | { kind: 'scene'; line: number; name: string; clips: (number | null)[]; machine: number | null }
   | { kind: 'octave'; line: number; octave: number }
+  /** `advance N`: how many rows the cursor moves after a note is written. */
+  | { kind: 'advance'; line: number; step: number }
   | { kind: 'theme'; line: number; theme: string }
   /**
    * `instrument use <name|number>`: which imported instrument `wave font` plays.
@@ -921,6 +1033,8 @@ type ScriptCommand =
    * song that was bounced or normalised once needs in order to be put back.
    */
   | { kind: 'export'; line: number; range?: BounceRange | null; loud?: number | null }
+  /** `pack save`: write the song, its samples and its plugins as one file. */
+  | { kind: 'pack'; line: number }
   /**
    * `page NAME`: which full screen the app is showing.
    *
@@ -1197,6 +1311,9 @@ type ScriptCommand =
       transform: RowTransformId;
       /** Whole octaves, always positive — the direction is in `transform`. */
       octaves: number;
+      /** Signed semitones, for `transpose` — the one transform that moves by less
+       * than an octave, and negative when the range falls. */
+      semitones: number;
       /** How many times the range plays IN ALL, 2 or more, for `repeat`. */
       times: number;
       /** How many hits inside its step each hit becomes, for `roll`. */
@@ -1204,6 +1321,15 @@ type ScriptCommand =
     }
   | {
       kind: 'note'; line: number; pattern: number; row: number; track: number; midi: number | null;
+      /**
+       * The cell is a STOP rather than a note: `off` or `cut` on this step.
+       *
+       * It rides on the note command because it writes the same thing — one
+       * cell, at one row of one channel — and because every consumer already
+       * knows where that is. `midi` is null with it, since a stop sounds no
+       * pitch; the two are never both set.
+       */
+      gesture?: StopId;
       /**
        * The OTHER notes in the same cell, when the cell is a chord.
        *
@@ -1246,6 +1372,8 @@ type ScriptCommand =
    * both call `generateArp`, which calls the modifier's own `arpNotes`.
    */
   | { kind: 'arpWrite'; line: number; pattern: number; row: number; track: number; octave: number; spec: ChordSpec }
+  /** `arp write ROW TRACK *`: the same run, from the chord already in that cell. */
+  | { kind: 'arpCell'; line: number; pattern: number; row: number; track: number }
   | { kind: 'progression'; line: number; progression: Progression | null }
   /**
    * `generate euclid pad 1 5`: a Euclidean rhythm written into a drum-machine pad.
@@ -1658,11 +1786,126 @@ function parseCellPitches(text: string, octave: number): number[] | null {
  * worth a sentence of its own ("a cell holds at most 8 notes"), and answering it
  * with "unknown command" would hide the very limit the message exists to teach.
  */
+/**
+ * The clauses a cell can carry after a colon: `C-4:late2`, `hat:pan-30:seek25`.
+ *
+ * Returned BESIDE the cell text rather than inside it, because the note tokeniser
+ * is one place every other spelling has to keep agreeing with; a clause is an
+ * addition to a cell, not another way to write a pitch. Each name is the word its
+ * own statement uses, so `:panL` and `pan … L` cannot mean different things.
+ *
+ * Null when a clause is not one this build reads — an unknown name, or a number
+ * outside the range its statement allows — so the line is refused by name rather
+ * than quietly played plainly.
+ */
+function cellClausesOf(
+  text: string,
+): { rest: string; clauses: { late?: number; start?: number; pan?: number; fade?: number } } | null {
+  const parts = text.split(':');
+  if (parts.length === 1) return { rest: text, clauses: {} };
+  const clauses: { late?: number; start?: number; pan?: number; fade?: number } = {};
+  for (const part of parts.slice(1)) {
+    const match = /^(late|seek|pan|fade)(-?\d+)$/i.exec(part);
+    if (!match) return null;
+    const name = match[1].toLowerCase();
+    const value = Number(match[2]);
+    if (name === 'late') {
+      if (!Number.isInteger(value) || value < 0 || value > MAX_LATE) return null;
+      clauses.late = value;
+    } else if (name === 'seek') {
+      if (!Number.isFinite(value) || value < 0 || value > MAX_START) return null;
+      clauses.start = Math.round(startFraction(value) * 100);
+    } else if (name === 'pan') {
+      if (!Number.isFinite(value) || value < -100 || value > 100) return null;
+      clauses.pan = clampPan(value);
+    } else {
+      if (!Number.isFinite(value) || value < 0 || value > MAX_FADE) return null;
+      clauses.fade = clampFade(value);
+    }
+  }
+  return { rest: parts[0], clauses };
+}
+
+/**
+ * The rows a `push`/`seek` line addresses: `3` is one row, `3-6` is four.
+ *
+ * Null when the text is not a row span at all. A span that runs backwards
+ * (`6-3`) is null too rather than quietly swapped, because a backwards span is a
+ * line somebody got wrong, and the message that follows says which number it
+ * could not read.
+ */
+/**
+ * Write one arpeggio run into a pattern: one note per step, from `row` down.
+ *
+ * ONE writer for both spellings — `arp write ROW TRACK Am` and `arp write ROW
+ * TRACK *` — because a run read from the song's dials and a run read from the
+ * cell's own notes must land the same cells. The walk stops when it runs out of
+ * chord or out of room, so nothing here can run off the pattern.
+ *
+ * GATE is written whether or not it differs from the default: the run SAYS each
+ * note's velocity, and a cell left holding some other number would make the grid
+ * disagree with what the page previewed.
+ */
+function writeArpRun(
+  pattern: ReturnType<typeof ensurePattern>,
+  notes: readonly number[],
+  row: number,
+  track: number,
+  settings: ArpSettings,
+): void {
+  const available = pattern.steps.length - row;
+  for (const step of generateArp(notes, row, settings, available)) {
+    const cell = pattern.steps[step.step]?.[track - 1];
+    if (!cell) continue;
+    setCellNotes(cell, [step.note]);
+    cell.velocity = step.velocity;
+  }
+}
+
+/**
+ * A cell's colon clauses, as the statements they name.
+ *
+ * The same commands `push`/`seek`/`pan`/`fade` push, for the one cell the clause
+ * was written on — so the spelling and the statement land identical cells, and
+ * neither can quietly become the only one that works.
+ */
+function clauseCommands(
+  clauses: { late?: number; start?: number; pan?: number; fade?: number },
+  line: number,
+  pattern: number,
+  row: number,
+  track: number,
+): ScriptCommand[] {
+  const out: ScriptCommand[] = [];
+  if (clauses.late !== undefined) out.push({ kind: 'push', line, pattern, row, track, late: clauses.late });
+  if (clauses.start !== undefined) out.push({ kind: 'seek', line, pattern, row, track, start: clauses.start });
+  if (clauses.pan !== undefined) out.push({ kind: 'pan', line, pattern, row, track, pan: clauses.pan });
+  if (clauses.fade !== undefined) out.push({ kind: 'fade', line, pattern, row, track, fade: clauses.fade });
+  return out;
+}
+
+function rowSpanOf(text: string): [number, number] | null {
+  const parts = text.split('-');
+  if (parts.length > 2) return null;
+  const first = Number(parts[0]);
+  const last = parts.length === 2 ? Number(parts[1]) : first;
+  if (!Number.isInteger(first) || !Number.isInteger(last)) return null;
+  if (first < 1 || last < first) return null;
+  return [first, last];
+}
+
 function isCellToken(token: string): boolean {
   if (EMPTY_TOKENS.has(token)) return true;
-  const head = splitCell(token).pitch;
+  // The clauses after a `:` are not part of the pitch, so the spelling check runs
+  // on what is left — `C-4:late2` is a cell, and refusing it as an unknown command
+  // would hide the very feature the spelling exists for.
+  const bare = token.split(':')[0];
+  const head = splitCell(bare).pitch;
   // A DRUM word is a cell: `kick`, and `hat*3` with a gesture on it.
   if (drumFromName(head) !== null) return true;
+  // And so is a STOP: `off` and `cut` stand in a column the way `kick` does,
+  // which is what lets a whole bar of stops be written as a grid row.
+  if (stopFromName(head) !== null) return true;
   const parts = head.split(CELL_NOTE_SEPARATOR);
   return parts.length > 0 && parts.every((part) => PITCH_RE.test(part.trim()));
 }
@@ -2009,11 +2252,35 @@ export function parseScript(
       }
       tokens.forEach((token, column) => {
         if (EMPTY_TOKENS.has(token.text)) return;
-        const { pitch, articulation: articulationText_, velocity: velocityText } = splitCell(token.text);
+        // The colon clauses belong to the CELL, not to the pitch: `C-4:late2` is
+        // `C-4` plus a push, written where a hand already is. Stripped here, so
+        // everything below reads exactly what it read before this existed.
+        const clauseRead = cellClausesOf(token.text);
+        if (clauseRead === null) {
+          fail(lineNumber, `column ${column + 1}: "${token.text}" has a clause a note cannot carry. Write :late0..${MAX_LATE} (ticks), :seek0..${MAX_START} (percent in), :pan-100..100 or :fade0..${MAX_FADE} (percent of the note), e.g. C-4:late2 or hat:pan-30.`);
+          return;
+        }
+        const { pitch, articulation: articulationText_, velocity: velocityText } = splitCell(clauseRead.rest);
         // A grid word may be a DRUM rather than a pitch: `kick . hat .` is a beat
         // written the way a drummer reads it, and it is the same one-word-per-cell
         // grammar everything else here uses. `pitch` is the word; everything after
         // it — the force and the gesture — belongs to the hit.
+        // A STOP is a word rather than a pitch: `off` ends what the channel is
+        // holding, `cut` bites it off. It takes no force and no gesture of its
+        // own — `off~40` is not quieter, it is a typo — so the message says the
+        // one thing the word can mean and stops there.
+        const stop = stopFromName(pitch);
+        if (stop !== null) {
+          if (articulationText_ !== '' || velocityText !== null) {
+            fail(lineNumber, `column ${column + 1}: "${token.text}" is a stop, so it takes no force and no gesture. Write ${stop} on its own.`);
+            return;
+          }
+          commands.push({
+            kind: 'note', line: lineNumber, pattern: state.pattern, row: state.rowCursor,
+            track: column + 1, midi: null, gesture: stop,
+          });
+          return;
+        }
         const asDrum = drumFromName(pitch);
         const midis = asDrum === null ? parseCellPitches(pitch, state.octave) : [drumPitch(asDrum)];
         if (midis === null) {
@@ -2061,6 +2328,13 @@ export function parseScript(
           ...(articulation.grace > 0 ? { grace: articulation.grace } : {}),
           ...(articulation.bend !== 0 ? { bend: articulation.bend } : {}),
         });
+        // The clauses become the statements they name, for THIS cell — one writer
+        // again, so `C-4:late2` and `push PATTERN ROW TRACK 2` cannot disagree.
+        // `state.rowCursor` counts from 0 and the statements count rows from 1,
+        // which is the one place the two conventions meet — spelled once, here.
+        for (const clause of clauseCommands(clauseRead.clauses, lineNumber, state.pattern, state.rowCursor + 1, column + 1)) {
+          commands.push(clause);
+        }
       });
       state.rowCursor += 1;
       continue;
@@ -2133,7 +2407,26 @@ export function parseScript(
         commands.push({ kind: 'title', line: lineNumber, title });
         break;
       }
-      case 'key': {
+      case 'credits': {
+        // `credits "MADE BY ..."`: who made the song and what it borrows. Free
+        // text in quotes, and `credits clear` for a song that had some.
+        const text = args.join(' ').trim();
+        if (text === '') {
+          fail(lineNumber, 'credits needs the line itself, e.g. credits "MADE BY ... — break from a 1972 record", or credits clear to take it off.');
+          break;
+        }
+        if (text.toLowerCase() === 'clear') {
+          commands.push({ kind: 'credits', line: lineNumber, text: undefined });
+          break;
+        }
+        if (text.length > MAX_CREDITS) {
+          fail(lineNumber, `a credits line may be at most ${MAX_CREDITS} characters; this one is ${text.length}. A credit is a name and a source, not an essay — trim it to the part that matters.`);
+          break;
+        }
+        commands.push({ kind: 'credits', line: lineNumber, text: tidyCredits(text) });
+        break;
+      }
+        case 'key': {
         // Two spellings, one reader: `key D minor` and `key Dm` are the same
         // command, because a key is a note and a scale however it is written.
         if (args.length === 0) {
@@ -2200,10 +2493,30 @@ export function parseScript(
         break;
       }
       case 'steps': {
-        if (args.length !== 1) { fail(lineNumber, `steps needs one number, e.g. steps 32.`); break; }
+        // `steps 32` is the whole song's grid; `steps 32 pattern 3` is ONE
+        // pattern's, which is how a verse of sixteen and a chorus of thirty-two
+        // live in the same song — the same word, a narrower scope.
+        const scoped = args.length === 3 && args[1]?.toLowerCase() === 'pattern';
+        if (args.length !== 1 && !scoped) {
+          fail(lineNumber, `steps needs one number, e.g. steps 32 — or steps 32 pattern 3 for one pattern's own length.`);
+          break;
+        }
         const rows = Number(args[0]);
         if (!Number.isInteger(rows) || rows < MIN_ROWS || rows > MAX_ROWS) {
           fail(lineNumber, `steps must be a whole number ${MIN_ROWS}..${MAX_ROWS}; got "${args[0]}".`);
+          break;
+        }
+        if (scoped) {
+          const which = Number(args[2]);
+          if (!Number.isInteger(which) || which < 1 || which > MAX_PATTERNS) {
+            fail(lineNumber, `steps ... pattern needs a pattern number 1..${MAX_PATTERNS}; got "${args[2]}".`);
+            break;
+          }
+          // The rows written BELOW this line land in this pattern, so the parser's
+          // own idea of how tall the grid is has to follow, or a note on step 20
+          // would be refused by a parser that still thought the pattern was 16.
+          if (which === state.pattern) state.rows = rows;
+          commands.push({ kind: 'steps', line: lineNumber, rows, pattern: which });
           break;
         }
         // A shorter grid cannot hold the rows already written, so the cursor
@@ -2724,6 +3037,262 @@ export function parseScript(
         commands.push({ kind: 'master', line: lineNumber, effects });
         break;
       }
+      case 'table': {
+        // A wavetable of the channel's own: a name and the harmonic amplitudes that
+        // shape it, from the fundamental upward.
+        if (args.length === 0) {
+          fail(lineNumber, `table needs a channel, a name and at least one harmonic, e.g. "table 1 ODD 1 0 0.5", or "table 1 clear" for the chip bank.`);
+          break;
+        }
+        const index = Number(args[0]);
+        if (!Number.isInteger(index) || index < 1 || index > state.trackCount) {
+          fail(lineNumber, `table takes a channel NUMBER first, 1..${state.trackCount}, e.g. "table 1 ODD 1 0 0.5"; got "${args[0]}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        if (args.length === 2 && args[1].toLowerCase() === 'clear') {
+          commands.push({ kind: 'table', line: lineNumber, track: index, table: null });
+          break;
+        }
+        if (args.length < 3) {
+          fail(lineNumber, `table needs a NAME and the harmonics after it, e.g. "table 1 ODD 1 0 0.5" — one number per harmonic, starting at the fundamental.`);
+          break;
+        }
+        const nameProblem = tableNameProblem(args[1]);
+        if (nameProblem !== null) {
+          fail(lineNumber, `table needs a one-word name of up to ${MAX_TABLE_NAME} characters: ${nameProblem}. e.g. "table 1 ODD 1 0 0.5".`);
+          break;
+        }
+        const harmonics: number[] = [];
+        let badHarmonic: string | null = null;
+        for (const word of args.slice(2)) {
+          const amount = Number(word);
+          if (!Number.isFinite(amount)) {
+            badHarmonic = word;
+            break;
+          }
+          harmonics.push(clampHarmonic(amount));
+        }
+        if (badHarmonic !== null) {
+          fail(lineNumber, `table lists harmonics as numbers from -1 to 1, e.g. "table 1 ODD 1 0 0.5"; got "${badHarmonic}".`);
+          break;
+        }
+        if (harmonics.length > MAX_HARMONICS) {
+          fail(lineNumber, `table takes at most ${MAX_HARMONICS} harmonics; it was given ${harmonics.length}.`);
+          break;
+        }
+        const read = tidyTable(args[1], harmonics);
+        if (read === null) {
+          fail(lineNumber, `table needs at least one non-zero harmonic — a spectrum of zeroes is silence with a name, e.g. "table 1 ODD 1 0 0.5".`);
+          break;
+        }
+        commands.push({ kind: 'table', line: lineNumber, track: index, table: read });
+        break;
+      }
+      case 'slice': {
+        // One piece of a channel's recording: where it starts and where it ends,
+        // in the recording's own seconds. C-4 plays the first piece, C#-4 the
+        // second — so a chopped break is played like an instrument.
+        if (args.length === 0) {
+          fail(lineNumber, `slice needs a channel, a start and an end in seconds, e.g. "slice 1 0 0.42", or "slice 1 clear" to play the recording whole.`);
+          break;
+        }
+        const index = Number(args[0]);
+        if (!Number.isInteger(index) || index < 1 || index > state.trackCount) {
+          fail(lineNumber, `slice takes a channel NUMBER first, 1..${state.trackCount}, e.g. "slice 1 0 0.42"; got "${args[0]}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        if (args.length === 2 && args[1].toLowerCase() === 'clear') {
+          commands.push({ kind: 'slice', line: lineNumber, track: index, start: -1, end: -1 });
+          break;
+        }
+        if (args.length !== 3) {
+          fail(lineNumber, `slice takes a channel, a start and an end in SECONDS, e.g. "slice 1 0 0.42"; got ${args.length - 1} value${args.length === 2 ? '' : 's'}. Pieces are kept in time order, so they can be written in any order.`);
+          break;
+        }
+        const start = Number(args[1]);
+        const end = Number(args[2]);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0) {
+          fail(lineNumber, `slice needs a start and an end in seconds, 0 or more; got "${args[1]}" and "${args[2]}". Seconds into the recording: "slice 1 0 0.42" is the first 0.42s.`);
+          break;
+        }
+        commands.push({ kind: 'slice', line: lineNumber, track: index, start: clampSlice(start, end).start, end: clampSlice(start, end).end });
+        break;
+      }
+      case 'fade': {
+        // `fade PATTERN ROW TRACK PERCENT`: how much of its own length ONE hit
+        // falls away through. 0 is no fade — a note that keeps its envelope.
+        if (args.length !== 4) {
+          fail(lineNumber, `fade takes a pattern, a row, a channel and a percentage, e.g. "fade 1 1 2 40" has pattern 1's row 1 on channel 2 fall away over its last four tenths; got ${args.length} value${args.length === 1 ? '' : 's'}.`);
+          break;
+        }
+        const fadePattern = Number(args[0]);
+        const fadeTrack = Number(args[2]);
+        const fadeValue = Number(args[3]);
+        if (!Number.isInteger(fadePattern) || fadePattern < 1) {
+          fail(lineNumber, `fade takes a pattern NUMBER first, e.g. "fade 1 1 2 40"; got "${args[0]}". Use "patterns N" first to add one, and "order" to hear it.`);
+          break;
+        }
+        const fadeSpan = rowSpanOf(args[1]);
+        if (fadeSpan === null) {
+          fail(lineNumber, `fade needs a ROW second — one row or a span like 1-4 — e.g. "fade 1 1 2 40"; got "${args[1]}". Rows count from 1, the way the grid numbers them.`);
+          break;
+        }
+        if (!Number.isInteger(fadeTrack) || fadeTrack < 1 || fadeTrack > state.trackCount) {
+          fail(lineNumber, `fade needs a CHANNEL 1..${state.trackCount} third, e.g. "fade 1 1 2 40"; got "${args[2]}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        if (!Number.isFinite(fadeValue) || fadeValue < 0 || fadeValue > MAX_FADE) {
+          fail(lineNumber, `fade needs a PERCENTAGE 0..${MAX_FADE} last — how much of the note is the fall — e.g. "fade 1 1 2 40"; got "${args[3]}".`);
+          break;
+        }
+        for (let r = fadeSpan[0]; r <= fadeSpan[1]; r++) {
+          commands.push({ kind: 'fade', line: lineNumber, pattern: fadePattern, row: r, track: fadeTrack, fade: clampFade(fadeValue) });
+        }
+        break;
+      }
+      case 'pan': {
+        // `pan PATTERN ROW TRACK VALUE`: which way ONE hit leans, -100 hard left
+        // to 100 hard right, RELATIVE to the channel — so a hat can sit off-centre
+        // in a kit that is otherwise where the mixer put it.
+        if (args.length !== 4) {
+          fail(lineNumber, `pan takes a pattern, a row, a channel and a place, e.g. "pan 1 1 2 -30" puts pattern 1's row 1 on channel 2 left of centre; got ${args.length} value${args.length === 1 ? '' : 's'}.`);
+          break;
+        }
+        const panPattern = Number(args[0]);
+        const panTrack = Number(args[2]);
+        const panValue = Number(args[3]);
+        if (!Number.isInteger(panPattern) || panPattern < 1) {
+          fail(lineNumber, `pan takes a pattern NUMBER first, e.g. "pan 1 1 2 -30"; got "${args[0]}". Use "patterns N" first to add one, and "order" to hear it.`);
+          break;
+        }
+        const panSpan = rowSpanOf(args[1]);
+        if (panSpan === null) {
+          fail(lineNumber, `pan needs a ROW second — one row or a span like 1-4 — e.g. "pan 1 1 2 -30"; got "${args[1]}". Rows count from 1, the way the grid numbers them.`);
+          break;
+        }
+        if (!Number.isInteger(panTrack) || panTrack < 1 || panTrack > state.trackCount) {
+          fail(lineNumber, `pan needs a CHANNEL 1..${state.trackCount} third, e.g. "pan 1 1 2 -30"; got "${args[2]}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        if (!Number.isFinite(panValue)) {
+          fail(lineNumber, `pan needs a PLACE last, -100 (hard left) .. 100 (hard right), where 0 is the centre; got "${args[3]}".`);
+          break;
+        }
+        for (let r = panSpan[0]; r <= panSpan[1]; r++) {
+          commands.push({ kind: 'pan', line: lineNumber, pattern: panPattern, row: r, track: panTrack, pan: clampPan(panValue) });
+        }
+        break;
+      }
+      case 'seek': {
+        // `seek PATTERN ROW TRACK PERCENT`: where in its own recording ONE hit
+        // begins, as a percentage of the window that recording plays. The same
+        // four numbers as `push` because it names the same thing — a cell by
+        // where it is.
+        if (args.length !== 4) {
+          fail(lineNumber, `seek takes a pattern, a row, a channel and a percentage, e.g. "seek 1 1 2 25" begins pattern 1's row 1 on channel 2 a quarter of the way into its sample; got ${args.length} value${args.length === 1 ? '' : 's'}.`);
+          break;
+        }
+        const seekPattern = Number(args[0]);
+        const seekTrack = Number(args[2]);
+        const seekPercent = Number(args[3]);
+        if (!Number.isInteger(seekPattern) || seekPattern < 1) {
+          fail(lineNumber, `seek takes a pattern NUMBER first, e.g. "seek 1 1 2 25"; got "${args[0]}". Use "patterns N" first to add one, and "order" to hear it.`);
+          break;
+        }
+        // A ROW may be a SPAN — `seek 1 1-4 2 25` seeks four rows of a channel at
+        // once, which is what a chop point usually is. `3-3` and `3` mean the same
+        // thing, so a tool can write a span without asking whether it has one.
+        const seekSpan = rowSpanOf(args[1]);
+        if (seekSpan === null) {
+          fail(lineNumber, `seek needs a ROW second — one row or a span like 1-4 — e.g. "seek 1 1 2 25"; got "${args[1]}". Rows count from 1, the way the grid numbers them.`);
+          break;
+        }
+        if (!Number.isInteger(seekTrack) || seekTrack < 1 || seekTrack > state.trackCount) {
+          fail(lineNumber, `seek needs a CHANNEL 1..${state.trackCount} third, e.g. "seek 1 1 2 25"; got "${args[2]}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        if (!Number.isFinite(seekPercent) || seekPercent < 0 || seekPercent > MAX_START) {
+          fail(lineNumber, `seek needs a PERCENTAGE 0..${MAX_START} last, of the way into the sample; got "${args[3]}". ${MAX_START} is the most: past that what is left is a click, not an attack.`);
+          break;
+        }
+        for (let r = seekSpan[0]; r <= seekSpan[1]; r++) {
+          commands.push({ kind: 'seek', line: lineNumber, pattern: seekPattern, row: r, track: seekTrack, start: Math.round(startFraction(seekPercent) * 100) });
+        }
+        break;
+      }
+      case 'push': {
+        // `push PATTERN ROW TRACK TICKS`: the ONE cell addressed, then how far
+        // behind its step it lands. Four numbers because a push belongs to a
+        // cell, and a cell is named by where it is — there is no "current row"
+        // in a script, and inventing one would make a push depend on the line
+        // above it.
+        if (args.length !== 4) {
+          fail(lineNumber, `push takes a pattern, a row, a channel and a number of ticks, e.g. "push 1 1 2 2" lands pattern 1's row 1 on channel 2 two ticks late; got ${args.length} value${args.length === 1 ? '' : 's'}.`);
+          break;
+        }
+        const pattern = Number(args[0]);
+        const track = Number(args[2]);
+        const ticks = Number(args[3]);
+        if (!Number.isInteger(pattern) || pattern < 1) {
+          fail(lineNumber, `push takes a pattern NUMBER first, e.g. "push 1 1 2 2"; got "${args[0]}". Use "patterns N" first to add one, and "order" to hear it.`);
+          break;
+        }
+        // A span, `push`'s bargain one statement along: a whole snare row usually
+        // leans back together, so `push 1 1-4 2 2` writes four cells.
+        const pushSpan = rowSpanOf(args[1]);
+        if (pushSpan === null) {
+          fail(lineNumber, `push needs a ROW second — one row or a span like 1-4 — e.g. "push 1 1 2 2"; got "${args[1]}". Rows count from 1, the way the grid numbers them.`);
+          break;
+        }
+        if (!Number.isInteger(track) || track < 1 || track > state.trackCount) {
+          fail(lineNumber, `push needs a CHANNEL 1..${state.trackCount} third, e.g. "push 1 1 2 2"; got "${args[2]}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        if (!Number.isFinite(ticks) || ticks < 0 || ticks > MAX_LATE) {
+          fail(lineNumber, `push needs TICKS 0..${MAX_LATE} last, where a tick is a sixth of a step; got "${args[3]}". ${MAX_LATE} is the most: past that a hit is closer to the next step than its own.`);
+          break;
+        }
+        for (let r = pushSpan[0]; r <= pushSpan[1]; r++) {
+          commands.push({ kind: 'push', line: lineNumber, pattern, row: r, track, late: clampLate(ticks) });
+        }
+        break;
+      }
+      case 'zone': {
+        // One boundary of a channel's keyboard: which recording plays from a note
+        // upward — and `clear` for a channel that goes back to one recording.
+        if (args.length === 0) {
+          fail(lineNumber, `zone needs a channel, a note and one recording, e.g. "zone 1 C-4 PIANO_HI", or "zone 1 clear" to empty the map.`);
+          break;
+        }
+        const index = Number(args[0]);
+        if (!Number.isInteger(index) || index < 1 || index > state.trackCount) {
+          fail(lineNumber, `zone takes a channel NUMBER first, 1..${state.trackCount}, e.g. "zone 1 C-4 PIANO_HI"; got "${args[0]}". Use "tracks N" first to add channels.`);
+          break;
+        }
+        if (args.length === 2 && args[1].toLowerCase() === 'clear') {
+          commands.push({ kind: 'zone', line: lineNumber, track: index, note: 0, sample: null });
+          break;
+        }
+        if (args.length !== 3) {
+          fail(lineNumber, `zone takes a channel, a note and ONE recording, e.g. "zone 1 C-4 PIANO_HI". A recording's name is one word — rename the file to give it one.`);
+          break;
+        }
+        // A number or a note name, because a keymap is written by someone thinking
+        // in pitch: `C-4` and `60` are the same boundary.
+        const numeric = /^-?\d+$/.test(args[1]) ? Number(args[1]) : null;
+        const note = numeric !== null ? clampZoneNote(numeric) : noteNameToMidi(args[1]);
+        if (note === null) {
+          fail(lineNumber, `zone needs a NOTE, e.g. "zone 1 C-4 PIANO_HI"; got "${args[1]}". A note name like C-4 or a number ${MIN_ZONE_NOTE}..${MAX_ZONE_NOTE} both work.`);
+          break;
+        }
+        const problem = sampleNameProblem(args[2]);
+        if (problem !== null) {
+          fail(lineNumber, `zone names a recording the way "sample" does: ${problem}.`);
+          break;
+        }
+        commands.push({ kind: 'zone', line: lineNumber, track: index, note: clampZoneNote(note), sample: tidySampleName(args[2]) });
+        break;
+      }
       case 'automate': {
         // A lane: one channel, one thing to move, two ends, and the bars it
         // spans. Positional rather than paired words, because a range is not a
@@ -2761,17 +3330,29 @@ export function parseScript(
         }
         if (bad) break;
         const range = args.slice(4).map((word) => word.toLowerCase());
-        const wellFormed = range[0] === 'bars'
+        // TWO CLOCKS. `bars` is the song's clock, 1-based, the numbers `order`
+        // uses; `note` is steps since each hit on the channel, 0 being the hit
+        // itself. One statement, one word apart, because they are the same idea at
+        // two scales and a second verb would be a second thing to learn.
+        const noteClock = range[0] === 'note';
+        const wellFormed = (range[0] === 'bars' || noteClock)
           && ((range.length === 2 && Number.isFinite(Number(range[1])))
             || (range.length === 4 && range[2] === 'to' && Number.isFinite(Number(range[1])) && Number.isFinite(Number(range[3]))));
         if (!wellFormed) {
-          fail(lineNumber, `a lane needs the bars it spans, written "bars 8 to 15" (or "bars 8" for one bar), 1..${MAX_ORDER} — the same numbers "order" uses. Got "${args.slice(4).join(' ')}".`);
+          fail(lineNumber, `a lane needs the range it spans, written "bars 8 to 15" (or "bars 8" for one bar) or "note 0 to 6" for steps since each hit. Got "${args.slice(4).join(' ')}".`);
+          break;
+        }
+        if (noteClock && !supportsNoteClock(target)) {
+          fail(lineNumber, `"${target}" cannot ride the note clock: level and bright can — a level is rewritten on every step, and a brightness is scheduled across the note's own filter — and the rest are read once when the note begins. Write it on bars, or automate level or bright per note.`);
           break;
         }
         const startBar = Number(range[1]);
         const endBar = range.length === 4 ? Number(range[3]) : startBar;
-        if (startBar < 1 || startBar > MAX_ORDER || endBar < 1 || endBar > MAX_ORDER) {
-          fail(lineNumber, `bars are 1..${MAX_ORDER}, the same numbers the order uses; got "${range[1]}" to "${range.length === 4 ? range[3] : range[1]}".`);
+        if (noteClock ? (startBar < 0 || startBar > MAX_NOTE_CLOCK_STEPS || endBar < 0 || endBar > MAX_NOTE_CLOCK_STEPS)
+          : (startBar < 1 || startBar > MAX_ORDER || endBar < 1 || endBar > MAX_ORDER)) {
+          fail(lineNumber, noteClock
+            ? `steps since a hit run 0..${MAX_NOTE_CLOCK_STEPS}; got "${range[1]}" to "${range.length === 4 ? range[3] : range[1]}". A note is at most a few bars long.`
+            : `bars are 1..${MAX_ORDER}, the same numbers the order uses; got "${range[1]}" to "${range.length === 4 ? range[3] : range[1]}".`);
           break;
         }
         if (startBar > endBar) {
@@ -2786,6 +3367,7 @@ export function parseScript(
         commands.push({
           kind: 'automate', line: lineNumber, track: trackIndex, target,
           from: ends[0], to: ends[1], startBar, endBar,
+          ...(noteClock ? { clock: 'note' as const } : {}),
         });
         break;
       }
@@ -3219,6 +3801,35 @@ export function parseScript(
         }
         state.octave = value;
         commands.push({ kind: 'octave', line: lineNumber, octave: value });
+        break;
+      }
+      case 'advance': {
+        // A step of the CURSOR, not of the song: `advance 2` writes a note and
+        // leaves the cursor two rows down, which is how a four-on-the-floor or a
+        // 32nd roll gets typed without counting rows by hand. Session state, so it
+        // travels out in `settings` and no file ever carries it.
+        if (args.length !== 1) {
+          fail(lineNumber, 'advance needs one whole number, e.g. advance 2 — how many rows the cursor steps down after a note is written.');
+          break;
+        }
+        const value = Number(args[0]);
+        if (!Number.isInteger(value) || value < MIN_EDIT_STEP || value > MAX_EDIT_STEP) {
+          fail(lineNumber, `advance must be a whole number ${MIN_EDIT_STEP}..${MAX_EDIT_STEP}, and 0 means stay on the row; got "${args[0]}".`);
+          break;
+        }
+        commands.push({ kind: 'advance', line: lineNumber, step: value });
+        break;
+      }
+      case 'pack': {
+        // One word and one value: `pack save`. There is no `pack load` because a
+        // script names a file this machine would have to FIND, and a path in a
+        // browser is not a path — opening a pack is a click, and the file menu
+        // already has it.
+        if (args.length !== 1 || args[0].toLowerCase() !== 'save') {
+          fail(lineNumber, 'pack needs save, e.g. pack save — one file holding the song, its samples and its plugins.');
+          break;
+        }
+        commands.push({ kind: 'pack', line: lineNumber });
         break;
       }
       case 'theme': {
@@ -4396,6 +5007,14 @@ export function parseScript(
             break;
           }
           const text = args.slice(3).join(' ');
+          // A STAR means "the chord already written there": write the triad (or the
+          // single note) in the cell, then ask for the run, and the arp expands what
+          // you can SEE. Without it the chord has to be spelled twice — once into the
+          // cell and once on the `arp` line — and two spellings can drift apart.
+          if (text.trim() === '*') {
+            commands.push({ kind: 'arpCell', line: lineNumber, pattern: state.pattern, row, track });
+            break;
+          }
           const asDegree = parseDegree(text);
           let spec: ChordSpec;
           if (asDegree !== null) {
@@ -4621,7 +5240,7 @@ export function parseScript(
           }
           commands.push({
             kind: 'rows', line: lineNumber, pattern: state.pattern, from, to,
-            transform: direction === 'up' ? 'octave-up' : 'octave-down', octaves, times: 0, roll: 0,
+            transform: direction === 'up' ? 'octave-up' : 'octave-down', octaves, semitones: 0, times: 0, roll: 0,
           });
           break;
         }
@@ -4642,7 +5261,7 @@ export function parseScript(
           }
           commands.push({
             kind: 'rows', line: lineNumber, pattern: state.pattern, from, to,
-            transform: 'repeat', octaves: 0, times, roll: 0,
+            transform: 'repeat', octaves: 0, semitones: 0, times, roll: 0,
           });
           break;
         }
@@ -4661,7 +5280,7 @@ export function parseScript(
           }
           commands.push({
             kind: 'rows', line: lineNumber, pattern: state.pattern, from, to,
-            transform: 'roll', octaves: 0, times: 0, roll: hits,
+            transform: 'roll', octaves: 0, semitones: 0, times: 0, roll: hits,
           });
           break;
         }
@@ -4675,7 +5294,48 @@ export function parseScript(
           }
           commands.push({
             kind: 'rows', line: lineNumber, pattern: state.pattern, from, to,
-            transform: 'reverse', octaves: 0, times: 0, roll: 0,
+            transform: 'reverse', octaves: 0, times: 0, roll: 0, semitones: 0,
+          });
+          break;
+        }
+        if (word === TRANSPOSE_WORD) {
+          // A signed number of semitones, and the sign IS the direction — which
+          // is the difference between this and `octave up 2`: a shift small
+          // enough to be a colour does not want a word saying which way.
+          if (args.length !== 5) {
+            fail(lineNumber, `"${TRANSPOSE_WORD}" needs how many semitones to move the range, and the sign says which way — e.g. "rows 0 to 3 ${TRANSPOSE_WORD} 2" up a whole tone, or "rows 0 to 3 ${TRANSPOSE_WORD} -5" down a fourth; got "${args.slice(3).join(' ')}".`);
+            break;
+          }
+          const semitones = Number(args[4]);
+          if (!Number.isInteger(semitones) || semitones === 0 || semitones < MIN_TRANSPOSE || semitones > MAX_TRANSPOSE) {
+            fail(lineNumber, `"${TRANSPOSE_WORD}" takes a whole number of semitones ${MIN_TRANSPOSE}..${MAX_TRANSPOSE}, and not 0 — a range moved by nothing is the range as it is; got "${args[4]}".`);
+            break;
+          }
+          commands.push({
+            kind: 'rows', line: lineNumber, pattern: state.pattern, from, to,
+            transform: 'transpose', octaves: 0, semitones, times: 0, roll: 0,
+          });
+          break;
+        }
+        if (word === FILL_WORD) {
+          if (args.length !== 4) {
+            fail(lineNumber, `"${FILL_WORD}" keeps the note at the top of the range playing down its empty steps and takes nothing else — e.g. "rows 0 to 15 ${FILL_WORD}"; got "${args.slice(3).join(' ')}".`);
+            break;
+          }
+          commands.push({
+            kind: 'rows', line: lineNumber, pattern: state.pattern, from, to,
+            transform: 'fill', octaves: 0, semitones: 0, times: 0, roll: 0,
+          });
+          break;
+        }
+        if (word === INTERPOLATE_WORD) {
+          if (args.length !== 4) {
+            fail(lineNumber, `"${INTERPOLATE_WORD}" writes the empty steps between the range\u2019s first and last note and takes nothing else — e.g. "rows 0 to 7 ${INTERPOLATE_WORD}"; got "${args.slice(3).join(' ')}".`);
+            break;
+          }
+          commands.push({
+            kind: 'rows', line: lineNumber, pattern: state.pattern, from, to,
+            transform: 'interpolate', octaves: 0, semitones: 0, times: 0, roll: 0,
           });
           break;
         }
@@ -4916,6 +5576,13 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
     case 'title':
       song.title = command.title;
       return;
+    case 'credits':
+      // Who made it travels with the song — and `clear` DELETES the key rather
+      // than storing undefined, so an uncredited song has no `credits` key at
+      // all and is the song it always was.
+      if (command.text === undefined) delete song.credits;
+      else song.credits = command.text;
+      return;
     case 'key':
       song.key = copyKey(command.key);
       return;
@@ -4929,7 +5596,9 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
       return;
     }
     case 'steps':
-      setPatternRows(song, command.rows);
+      // One pattern when the line named one, every pattern otherwise.
+      if (command.pattern !== undefined) setPatternLength(song, command.pattern - 1, command.rows);
+      else setPatternRows(song, command.rows);
       return;
     case 'beat':
       song.rowsPerBeat = clampRowsPerBeat(command.stepsPerBeat);
@@ -5001,6 +5670,7 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
         to: command.to,
         startBar: command.startBar,
         endBar: command.endBar,
+        ...(command.clock ? { clock: command.clock } : {}),
       });
       return;
     case 'section':
@@ -5034,6 +5704,71 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
       // And neither is a loop region: the song is the whole song whether you
       // bounce four bars of it or all of it.
       return;
+    case 'table': {
+      const track = song.tracks[command.track - 1];
+      if (!track) return;
+      // `clear` wears the chip bank again; otherwise the spectrum REPLACES the one
+      // this channel had, the way a later `voice` line replaces the sound.
+      track.table = command.table ?? undefined;
+      return;
+    }
+    case 'slice': {
+      const track = song.tracks[command.track - 1];
+      if (!track) return;
+      // `clear` plays the recording whole again; otherwise the piece JOINS the list
+      // and the model sorts it into time order, because the list IS the keyboard.
+      if (command.start < 0) {
+        track.slices = [];
+        return;
+      }
+      track.slices = tidySlices([...(track.slices ?? []), { start: command.start, end: command.end }]);
+      return;
+    }
+    case 'fade': {
+      const cell = song.patterns[command.pattern - 1]?.steps[command.row - 1]?.[command.track - 1];
+      if (!cell) return;
+      // No fade is spelled by taking the field away: a note whose envelope is its
+      // own says nothing about leaving.
+      cell.fade = command.fade > 0 ? command.fade : undefined;
+      return;
+    }
+    case 'pan': {
+      const cell = song.patterns[command.pattern - 1]?.steps[command.row - 1]?.[command.track - 1];
+      if (!cell) return;
+      // The centre is spelled by taking the field away, so a hit that sits where
+      // the channel does says nothing about it.
+      cell.pan = command.pan !== 0 ? command.pan : undefined;
+      return;
+    }
+    case 'seek': {
+      const cell = song.patterns[command.pattern - 1]?.steps[command.row - 1]?.[command.track - 1];
+      if (!cell) return;
+      // `0` begins at the recording's own start, spelled by taking the field away.
+      cell.start = command.start > 0 ? command.start : undefined;
+      return;
+    }
+    case 'push': {
+      const cell = song.patterns[command.pattern - 1]?.steps[command.row - 1]?.[command.track - 1];
+      if (!cell) return;
+      // `0` is ON the step, and is spelled by taking the field away rather than
+      // storing a zero: a cell that says nothing about its time is a cell that
+      // has none to say, which is what every cell written before this meant.
+      cell.late = command.late > 0 ? clampLate(command.late) : undefined;
+      return;
+    }
+    case 'zone': {
+      const track = song.tracks[command.track - 1];
+      if (!track) return;
+      // `clear` empties the map, which is the channel this app has always had;
+      // otherwise the boundary JOINS the map and the model tidies it — sorted, and
+      // the last line about a note wins — so two orders mean one keymap.
+      if (command.sample === null) {
+        track.zones = [];
+        return;
+      }
+      track.zones = tidyZones([...(track.zones ?? []), { note: command.note, sample: command.sample }]);
+      return;
+    }
     case 'bus':
       // A group joins the mix. Replacing a name the song already has is the same
       // bargain as everywhere else here: the last line about a thing counts, so a
@@ -5324,6 +6059,12 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
         rollRange(pattern, range, command.roll);
       } else if (command.transform === 'reverse') {
         reverseRange(pattern, range);
+      } else if (command.transform === 'transpose') {
+        transposeRange(pattern, range, command.semitones);
+      } else if (command.transform === 'fill') {
+        fillRange(pattern, range);
+      } else if (command.transform === 'interpolate') {
+        interpolateRange(pattern, range);
       } else {
         shiftRangeOctaves(pattern, range, command.transform === 'octave-up' ? command.octaves : -command.octaves);
       }
@@ -5338,7 +6079,14 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
         // that rule (re-typing a note over one that slid takes the slide off);
         // the notes are simply the first thing it says. Erasing clears the notes
         // and leaves the velocity alone, as it always has.
-        if (command.drum !== undefined) {
+        if (command.gesture !== undefined) {
+          // A STOP is the third kind of cell: it holds no note, so it is written
+          // instead of one rather than beside it. `setCellStop` is the whole
+          // write, which is what keeps a step from both starting and ending a
+          // sound — the ambiguity the whole "a cell is one thing" rule exists to
+          // prevent.
+          setCellStop(cell, command.gesture);
+        } else if (command.drum !== undefined) {
           // A DRUM is a hit rather than a note: the cell becomes that kit sound,
           // at the drum's own pitch. The order matters — `setCellDrum` would
           // otherwise be undone by the note write below, and a cell is one thing.
@@ -5423,20 +6171,23 @@ function applyCommand(song: Song, command: ScriptCommand, voices: readonly UserV
       const notes = command.spec.kind === 'name'
         ? chordPitches(baseMidiForOctave(command.octave) + command.spec.root, command.spec.quality)
         : degreeChord(command.spec.degree, song.key, command.octave, DEFAULT_CHORD_DEGREES);
-      const settings = song.arp ?? DEFAULT_ARP;
-      const available = pattern.steps.length - command.row;
-      for (const step of generateArp(notes, command.row, settings, available)) {
-        const cell = pattern.steps[step.step]?.[command.track - 1];
-        if (!cell) continue;
-        setCellNotes(cell, [step.note]);
-        // GATE is the one per-cell intensity a cell holds, so it is written
-        // whether or not it differs from the default: the run SAYS each note's
-        // velocity, and a cell left holding some other number would make the
-        // written grid disagree with the run the page previewed and heard. At the
-        // default this writes the value the cell already had (100), which is what
-        // still keeps `arp write` at `gate 100` equal to `chord … arp`.
-        cell.velocity = step.velocity;
-      }
+      writeArpRun(pattern, notes, command.row, command.track, song.arp ?? DEFAULT_ARP);
+      return;
+    }
+    case 'arpCell': {
+      // The run from the cell's OWN notes, so what is on the grid is what is
+      // expanded — `arp write 0 1 *` after a triad turns that triad into a run
+      // without spelling it a second time. An empty or stopped cell has nothing to
+      // run, so the line is a no-op rather than a hole: nothing is cleared.
+      const pattern = ensurePattern(song, command.pattern);
+      const source = pattern.steps[command.row]?.[command.track - 1];
+      // A STOP holds no pitch, and an empty step holds nothing: both are no-ops
+      // rather than a run of silence.
+      const notes = source && source.gesture === null && source.note !== null
+        ? [source.note, ...source.extra]
+        : [];
+      if (notes.length === 0) return;
+      writeArpRun(pattern, notes, command.row, command.track, song.arp ?? DEFAULT_ARP);
       return;
     }
     case 'progression': {
@@ -5717,7 +6468,9 @@ export function applyScript(
         if (command.loud !== undefined) settings.loud = command.loud;
         continue;
       }
+      case 'pack': settings.packSave = true; continue;
       case 'octave': settings.octave = command.octave; continue;
+      case 'advance': settings.advance = command.step; continue;
       case 'theme': settings.theme = command.theme; continue;
       case 'page': settings.page = command.page; continue;
       case 'liveQuantize': settings.liveQuantize = command.bars; continue;
@@ -5758,26 +6511,26 @@ export function applyScript(
  * nobody can find is a keyword nobody uses.
  */
 export const SCRIPT_QUICK_REFERENCE: readonly string[] = [
-  'new  song "MY TUNE"  tracks 4',
+  'new  song  tracks 4  pattern 1',
   'key D minor  octave 5  tempo 120',
   'beat 4  steps 32  grid 16',
   'meter 7 8  tuning just  swing 60',
-  'groove shuffle  speed 80',
-  'kit 808  chip nes  volume 70',
+  'groove shuffle  speed 80  fade',
+  'kit  chip  volume 70  zone 1',
   'reverb 30  echo 20  master tilt',
-  'theme forge  chords 7th  solo 2',
+  'theme chords  solo  slice  table',
   'hear on  automate 1 gate 0',
   'machine level 85  pad 1 KICK',
   'section A 1  arrange A  scene A',
   'progression Am F C  bus DRUMS 70',
-  'instrument use 1  export all',
+  'instrument use 1  export pack',
   'start house  track 1 voice',
   'page mixer  live  record  plugin',
-  'layer 2 saw  fx 1 <id>  params',
-  'sample 2 BRK  pattern 1 "A"',
+  'layer 2  fx 1  params  credits',
+  'sample 2  push 1  seek 25  pan',
   'mute 1 unmute 1  erase 0 1',
   'copy 1 2  clear 0  note 0 1 C-4',
-  'chord 0 1 arp  drum 0 4 kick',
+  'chord 0 1  arp  drum  advance 2',
   'rows 0 to 3  generate order 1',
 ];
 

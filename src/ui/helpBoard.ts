@@ -155,6 +155,7 @@ export const HELP_COLUMNS: readonly (readonly HelpSection[])[] = [
         { keys: '2 3 5 6 7', action: 'UPPER OCTAVE, BLACK KEYS' },
         { keys: 'CLICK A PIANO KEY', action: 'WRITE A NOTE AT THE CURSOR' },
         { keys: '- / +', action: 'OCTAVE DOWN / UP' },
+        { keys: ', / .', action: 'EDIT STEP - HOW FAR IT WALKS' },
         { keys: '[ / ]', action: 'SOFTEN / ACCENT THE NOTE' },
         { keys: '> / *', action: 'A NOTE THAT SLIDES IN / STUTTERS' },
         { keys: 'BACKSPACE', action: 'CLEAR THE CELL' },
@@ -197,6 +198,16 @@ export const HELP_COLUMNS: readonly (readonly HelpSection[])[] = [
     },
   ],
   [
+    {
+      title: 'THE BLOCK',
+      rows: [
+        { keys: 'DRAG ACROSS CELLS', action: 'SELECT A BLOCK OF STEPS' },
+        { keys: 'CTRL+A', action: 'SELECT THE WHOLE PATTERN' },
+        { keys: 'CTRL+C / CTRL+X', action: 'COPY / CUT THE BLOCK' },
+        { keys: 'CTRL+V', action: 'PASTE AT THE CURSOR' },
+        { keys: 'ESC', action: 'LET THE BLOCK GO' },
+      ],
+    },
     {
       title: 'THE MENUS',
       rows: [

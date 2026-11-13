@@ -241,10 +241,14 @@ the change at once — no menus, no theory required.
 | `Space` | Play / stop |
 | `Esc` | Stop |
 | `Backspace`, `Delete`, or right-clicking a cell | Clear the cell |
+| Dragging across cells | Select a block of steps — drag up or left too, the block is the same. `Esc` lets it go |
+| `Ctrl+A` | Select the whole pattern |
+| `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | Copy, cut and paste the block — or, with nothing selected, the one cell under the cursor |
 | `Shift`+clicking a channel's name | Rename that channel |
 | `Shift`+clicking the song title in the top bar | Rename the song |
 | `Page Up` / `Page Down` | Previous / next pattern |
 | `-` / `=` | Octave down / up |
+| `,` / `.` | Edit step down / up (0–8): how many rows the cursor moves after a note, `0` staying on the row |
 | `[` / `]` | Soften / accent the note under the cursor (its velocity) |
 | `>` / `*` | Slide into that note / step its stutter round 2…8 and back |
 | `Ctrl+Z`, `Ctrl+Shift+Z` / `Ctrl+Y` | Undo / redo |
@@ -263,6 +267,19 @@ the change at once — no menus, no theory required.
 | `Ctrl+Enter` (in the SCRIPT panel) | Apply the script |
 | `Esc` (in the SCRIPT panel) | Close it without applying |
 | `Enter` / `Esc` (in a name box) | Keep / discard the channel name |
+
+A **block** is how the mouse selects more than one step. Drag across the grid and
+the steps you crossed are washed and outlined, with the size in a toast
+(`4 ROWS × 2 TRACKS`); `Ctrl+A` takes the whole pattern. `Ctrl+C` copies it,
+`Ctrl+X` copies it and clears what it took, and `Ctrl+V` drops its top-left on the
+cursor — clipped at the edge of the pattern rather than refused, replacing what it
+lands on, blanks included, so pasting a bar is a bar. `Esc` lets the block go, and
+so does arrowing away, clicking, or typing a note — this app has no modes, and a
+block you cannot walk out of would be one. The clipboard keeps what you copied, so
+copy a bar, walk to another pattern and paste it there. One paste is one
+`Ctrl+Z`, and a paste that would change nothing does not spend one. The block is
+the same region `rows 0 to 3 transpose 2` names in a script, so anything you can
+drag out you can also write down.
 
 Forget one of these? Press **`F1`** at any time. It opens a menu listing every
 control in the app, organised by what you are trying to do, and `F1`, `Esc` or a
@@ -1100,7 +1117,7 @@ to eight notes at once, so notes that overlap in TIME ring through each other
 - **Step / row** — one slice of time, numbered from 0. Four steps make one beat
   by default, so 16 steps is one bar of 4/4.
 - **Pattern** — a grid of steps across all channels: **16 steps by default, up to
-  512**. A song may hold up to 64 of them. Only one is shown at a time.
+  512**. A song may hold up to 128 of them. Only one is shown at a time.
 - **Cell** — the meeting of one step and one channel. It is either empty or it
   holds one note.
 - **Starter** — a whole worked skeleton of a genre (`start house`), which the app

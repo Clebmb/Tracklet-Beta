@@ -107,6 +107,9 @@ const tweaked = await tracklet.song.edit({
     { op: 'song.set', bpm: 96 },
     { op: 'track.set', track: 2, level: 70 },
     { op: 'cell.set', pattern: 3, row: 0, track: 1, note: 'F-4' },
+    // A step can also END a note: `gesture: 'off'` releases the channel there,
+    // `'cut'` chokes it. A stop takes no note, chord or drum beside it.
+    { op: 'cell.set', pattern: 3, row: 4, track: 1, gesture: 'off' },
   ],
 });
 // tweaked.result.edits: [{ edit: 1, target: 'tempo', from: '124', to: '96', changed: true }, …]
@@ -249,7 +252,16 @@ The **arranger's automation lanes** are editable too, as `automation.set` and
 whole lane with `{op:"automation.set", track, target, from, to, startBar, endBar}`
 — add an `index` to move the lane already at that position, or leave it out to
 append — and drop one with `{op:"automation.clear", index}`, or every lane when
-`index` is omitted. Values and bars are clamped the way the language clamps them,
+`index` is omitted. An optional `clock` of `"bars"` or `"note"` says WHICH CLOCK
+the two range numbers count in: `bars` is the song's timeline — the default, and
+what a caller that never says anything gets — and `note` counts steps since each
+hit, so the lane is an envelope every note on the channel plays (`startBar: 0,
+endBar: 6` is the six steps after the hit). `level` and `bright` can ride the
+note clock (a gain rewritten every step, a cutoff scheduled across the note); the
+rest are read once when the note is built, and the edit says so when asked for
+more; a lane's `clock` travels through
+`song.diff` too, so a replayed lane is the same lane. Values and bars are clamped
+the way the language clamps them,
 and `song.diff` emits these same edits, so a moved lane is one `automation.set`
 rather than a clear-and-re-add.
 

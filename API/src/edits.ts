@@ -27,6 +27,17 @@ import {
   ARP_DIRECTIONS,
   ARP_MODES,
   AUTOMATION_TARGET_WORDS,
+  MAX_NOTE_CLOCK_STEPS,
+  MAX_SLICES,
+  MAX_ZONES,
+  clampHarmonic,
+  tidyTable,
+  clampSlice,
+  clampZoneNote,
+  tidySlices,
+  tidyZones,
+  type KeyZone,
+  type Slice,
   addMachineBar,
   addScene,
   arpDirectionFromName,
@@ -37,6 +48,8 @@ import {
   cellText,
   clampArp,
   clampBpm,
+  MAX_CREDITS,
+  tidyCredits,
   clampBusLevel,
   clampDuck,
   clampEffects,
@@ -60,6 +73,9 @@ import {
   clampSectionMachineBar,
   clampSend,
   clampStutter,
+  clampFade,
+  clampLate,
+  startFraction,
   clampSwing,
   clampTune,
   clampVelocity,
@@ -117,9 +133,14 @@ import {
   sectionNameProblem,
   setCellDrum,
   setCellNotes,
+  setCellStop,
   setOrder,
   setMachineOrder,
+  setPatternLength,
   setPatternRows,
+  patternLength,
+  stopFromName,
+  supportsNoteClock,
   tidyBusName,
   tidyLane,
   tidyPadName,
@@ -142,6 +163,7 @@ import {
   type ArpMode,
   type ArpSettings,
   type AutomationLane,
+  type AutomationTargetId,
   type Cell,
   type ChannelEffects,
   type DrumId,
@@ -346,6 +368,21 @@ function applySongSet(song: Song, edit: ApiInput, where: string, record: RecordC
     song.title = after;
   }
 
+  // Credits: free text, so an empty string is the honest way to say 'none' — the
+  // same spelling `credits clear` uses on the language side.
+  const credits = maybeStr(edit, 'credits');
+  if (credits !== null) {
+    if (credits.trim().length > MAX_CREDITS) {
+      refuse('invalid_input', `${where}: a credits line may be at most ${MAX_CREDITS} characters; this one is ${credits.trim().length}.`);
+    }
+    const after = tidyCredits(credits);
+    record('song.set', 'credits', song.credits ?? '', after ?? '');
+    // An empty string DELETES the key, the same way `credits clear` does, so a
+    // song that says nothing about itself carries no field at all.
+    if (after === undefined) delete song.credits;
+    else song.credits = after;
+  }
+
   const bpm = maybeNumber(edit, 'bpm');
   if (bpm !== null) {
     const after = clampBpm(bpm);
@@ -375,9 +412,22 @@ function applySongSet(song: Song, edit: ApiInput, where: string, record: RecordC
   const rows = maybeNumber(edit, 'rows');
   if (rows !== null) {
     const after = clampRows(rows);
-    // Read the old length out BEFORE resizing every pattern in the song.
-    record('song.set', 'rows', patternRows(song), after);
-    setPatternRows(song, after);
+    // `pattern` narrows the edit to one pattern, the same scope `steps N pattern P`
+    // has in the language — so a caller can give a chorus its own length without
+    // reaching for the grid.
+    const which = maybeNumber(edit, 'pattern');
+    if (which !== null) {
+      const index = Math.round(which) - 1;
+      if (!song.patterns[index]) {
+        refuse('not_found', `${where}: this song has ${song.patterns.length} patterns, so "pattern" must be 1..${song.patterns.length}.`);
+      }
+      record('song.set', `pattern ${index + 1} rows`, patternLength(song, index), after);
+      setPatternLength(song, index, after);
+    } else {
+      // Read the old length out BEFORE resizing every pattern in the song.
+      record('song.set', 'rows', patternRows(song), after);
+      setPatternRows(song, after);
+    }
   }
 
   const beat = maybeNumber(edit, 'rowsPerBeat');
@@ -568,6 +618,94 @@ function applyTrackSet(song: Song, edit: ApiInput, where: string, record: Record
     record('track.set', `${at} sample`, track.sample ?? NO_SAMPLE_WORD, sample.value ?? NO_SAMPLE_WORD);
     track.sample = sample.value;
   }
+
+  // The KEYMAP, written through the model's own tidy so an agent's map and a
+  // script's map are the same map: sorted, one boundary per note, the last one
+  // winning. `null` clears it — the one-recording channel the app has always had.
+  if (edit.zones !== undefined) {
+    const raw = edit.zones;
+    const had = (track.zones ?? []).length;
+    if (raw === null) {
+      record('track.set', `${at} keymap`, had, 0);
+      track.zones = [];
+    } else if (!Array.isArray(raw)) {
+      refuse('invalid_input', `${where}: ${at} takes "zones" as an array of {note, sample} pairs, e.g. [{"note": 60, "sample": "PIANO_HI"}], or null to clear it.`);
+    } else {
+      if (raw.length > MAX_ZONES) {
+        refuse('invalid_input', `${where}: ${at} takes at most ${MAX_ZONES} keyzones; it was given ${raw.length}.`);
+      }
+      const parsed: KeyZone[] = [];
+      for (const zone of raw) {
+        const entry = zone as { note?: unknown; sample?: unknown } | null;
+        const note = typeof entry?.note === 'number' ? entry.note : Number.NaN;
+        const name = typeof entry?.sample === 'string' ? entry.sample.trim() : '';
+        if (!Number.isFinite(note) || name === '') {
+          refuse('invalid_input', `${where}: ${at} takes zones as {note, sample} pairs, e.g. [{"note": 60, "sample": "PIANO_HI"}].`);
+        }
+        parsed.push({ note: clampZoneNote(note), sample: name });
+      }
+      const after = tidyZones(parsed);
+      track.zones = after;
+      record('track.set', `${at} keymap`, had, after.length);
+    }
+  }
+
+  // The SLICES, tidied by the model so an agent's chop and a script's chop are the
+  // same chop: time order, nothing degenerate. `null` plays the recording whole.
+  if (edit.slices !== undefined) {
+    const raw = edit.slices;
+    const hadSlices = (track.slices ?? []).length;
+    if (raw === null) {
+      record('track.set', `${at} slices`, hadSlices, 0);
+      track.slices = [];
+    } else if (!Array.isArray(raw)) {
+      refuse('invalid_input', `${where}: ${at} takes "slices" as an array of {start, end} pairs in seconds, e.g. [{"start": 0, "end": 0.42}], or null to play the recording whole.`);
+    } else {
+      if (raw.length > MAX_SLICES) {
+        refuse('invalid_input', `${where}: ${at} takes at most ${MAX_SLICES} slices; it was given ${raw.length}.`);
+      }
+      const parsed: Slice[] = [];
+      for (const piece of raw) {
+        const entry = piece as { start?: unknown; end?: unknown } | null;
+        const start = typeof entry?.start === 'number' ? entry.start : Number.NaN;
+        const end = typeof entry?.end === 'number' ? entry.end : Number.NaN;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0) {
+          refuse('invalid_input', `${where}: ${at} takes slices as {start, end} pairs in seconds, e.g. [{"start": 0, "end": 0.42}].`);
+        }
+        parsed.push(clampSlice(start, end));
+      }
+      const afterSlices = tidySlices(parsed);
+      track.slices = afterSlices;
+      record('track.set', `${at} slices`, hadSlices, afterSlices.length);
+    }
+  }
+
+  // A WAVETABLE of the channel's own, tidied by the model so an agent's spectrum
+  // and a script's are the same spectrum. `null` wears the chip bank again.
+  if (edit.table !== undefined) {
+    const raw = edit.table;
+    if (raw === null) {
+      record('track.set', `${at} table`, track.table?.name ?? 'BANK', 'BANK');
+      track.table = undefined;
+    } else if (typeof raw !== 'object' || typeof (raw as { name?: unknown }).name !== 'string' || !Array.isArray((raw as { harmonics?: unknown }).harmonics)) {
+      refuse('invalid_input', `${where}: ${at} takes "table" as {name, harmonics}, e.g. {"name": "ODD", "harmonics": [1, 0, 0.5]}, or null for the chip bank.`);
+    } else {
+      const source = raw as { name: string; harmonics: unknown[] };
+      const harmonics: number[] = [];
+      for (const value of source.harmonics) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          refuse('invalid_input', `${where}: ${at} lists harmonics as numbers from -1 to 1, e.g. [1, 0, 0.5].`);
+        }
+        harmonics.push(clampHarmonic(value));
+      }
+      const read = tidyTable(source.name, harmonics);
+      if (read === null) {
+        refuse('invalid_input', `${where}: ${at} needs a one-word table name and at least one non-zero harmonic — a spectrum of zeroes is silence with a name.`);
+      }
+      record('track.set', `${at} table`, track.table?.name ?? 'BANK', read.name);
+      track.table = read;
+    }
+  }
 }
 
 /**
@@ -701,18 +839,36 @@ function applyAutomationSet(song: Song, edit: ApiInput, where: string, record: R
   if (track < 1 || track > song.tracks.length) {
     refuse('invalid_input', `${where}: this song has ${song.tracks.length} channels, so "track" must be 1..${song.tracks.length}.`);
   }
+  // The CLOCK: `bars` counts the song, `note` counts steps since each hit. Absent
+  // means bars, so every caller written before the second clock existed sets the
+  // lane it always set.
+  const clockRaw = maybeStr(edit, 'clock');
+  const clockWord = clockRaw === null ? 'bars' : clockRaw.trim().toLowerCase();
+  if (clockWord !== 'bars' && clockWord !== 'note') {
+    refuse('invalid_input', `${where}: "clock" must be "bars" (the song's bars) or "note" (steps since each hit); got ${JSON.stringify(clockRaw)}.`);
+  }
+  const noteClock = clockWord === 'note';
+  if (noteClock && !supportsNoteClock(target as AutomationTargetId)) {
+    refuse('invalid_input', `${where}: "${target}" cannot ride the note clock — "level" and "bright" can, because a level is rewritten on every step and a brightness is scheduled across the note's own filter, and the rest are read once when the note begins. Write it on bars, or automate level or bright per note.`);
+  }
   const from = required(edit, 'from', where);
   const to = required(edit, 'to', where);
   const startBar = required(edit, 'startBar', where);
   const endBar = required(edit, 'endBar', where);
+  if (noteClock && (startBar < 0 || endBar > MAX_NOTE_CLOCK_STEPS)) {
+    refuse('invalid_input', `${where}: on the note clock "startBar" and "endBar" are STEPS SINCE THE HIT, 0..${MAX_NOTE_CLOCK_STEPS}; got ${startBar} to ${endBar}.`);
+  }
   if (startBar > endBar) {
-    refuse('invalid_input', `${where}: "startBar" must not be after "endBar" (got ${startBar} > ${endBar}); a lane runs from an earlier bar to a later one.`);
+    refuse('invalid_input', `${where}: "startBar" must not be after "endBar" (got ${startBar} > ${endBar}); a lane runs from an earlier ${noteClock ? 'step' : 'bar'} to a later one.`);
   }
 
   // Clamp here rather than trusting the numbers, exactly as `automate` does — a
   // bar past the end or a value off its range becomes the nearest legal one, so
   // the lane the caller reads back is a lane the language would also accept.
-  const lane: AutomationLane = tidyLane({ track, target, from, to, startBar, endBar });
+  const lane: AutomationLane = tidyLane({
+    track, target, from, to, startBar, endBar,
+    ...(noteClock ? { clock: 'note' as const } : {}),
+  });
   const lanes = song.automation;
   const indexRaw = maybeNumber(edit, 'index');
   let index: number;
@@ -945,9 +1101,25 @@ function applyCellSet(song: Song, edit: ApiInput, where: string, record: RecordC
   const single = edit.note;
   const many = edit.notes;
   const writesNotes = (single !== undefined && single !== null) || Array.isArray(many);
+  const gesture = maybeStr(edit, 'gesture');
 
   if (drum !== null && writesNotes) {
     refuse('invalid_input', `${where}: a step is a note, a chord or a drum, never two — set "drum" or "note"/"notes", not both.`);
+  }
+
+  if (gesture !== null) {
+    // A STOP is the fourth kind of step, and the same rule: it cannot also be a
+    // note. Writing one through the API has to be exactly as clear as writing
+    // `off` in a grid row, or an agent could ask for a step that both starts and
+    // ends a sound and get one of the two without being told.
+    if (drum !== null || writesNotes) {
+      refuse('invalid_input', `${where}: a step is a note, a chord, a drum or a stop — set "gesture" on its own, beside none of the others.`);
+    }
+    const stop = stopFromName(gesture);
+    if (stop === null) {
+      refuse('invalid_input', `${where}: "${gesture}" is not a stop. Write "off" to release the channel or "cut" to choke it.`);
+    }
+    setCellStop(cell, stop);
   }
 
   if (drum !== null) {
@@ -968,6 +1140,29 @@ function applyCellSet(song: Song, edit: ApiInput, where: string, record: RecordC
 
   const stutter = maybeNumber(edit, 'stutter');
   if (stutter !== null) cell.stutter = clampStutter(stutter);
+
+  // WHEN the hit lands, in ticks of a sixth of the step: `0` is on the step and
+  // anything up to `MAX_LATE` pushes it behind the beat. Set on the cell rather
+  // than on the note, so a push survives a re-pitch or a re-velocity.
+  const late = maybeNumber(edit, 'late');
+  if (late !== null) cell.late = clampLate(late) > 0 ? clampLate(late) : undefined;
+
+  // Where in its own recording the hit BEGINS, as a percentage of the window it
+  // plays. A cell that seeks from the start is spelled by taking the field away,
+  // `late`'s bargain one clause along.
+  // How much of its own length the note falls away through: 0 is no fade.
+  const fade = maybeNumber(edit, 'fade');
+  if (fade !== null) cell.fade = clampFade(fade) > 0 ? clampFade(fade) : undefined;
+
+  // Which way the hit leans, relative to the channel: -100 left, 0 the centre.
+  const pan = maybeNumber(edit, 'pan');
+  if (pan !== null) cell.pan = clampPan(pan) !== 0 ? clampPan(pan) : undefined;
+
+  const start = maybeNumber(edit, 'start');
+  if (start !== null) {
+    const sought = Math.round(startFraction(start) * 100);
+    cell.start = sought > 0 ? sought : undefined;
+  }
 
   const after = cellText(cell);
   // The token is the note. When only the feel moved the token is unchanged, so

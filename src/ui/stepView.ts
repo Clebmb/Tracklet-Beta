@@ -33,7 +33,7 @@
  * a browser, and the arithmetic below is the kind that goes wrong quietly.
  */
 
-import { clampVelocity, MAX_VELOCITY, cellText, type Cell } from '../model/song';
+import { clampVelocity, MAX_VELOCITY, cellStop, cellText, type Cell } from '../model/song';
 import { DRUMS, type DrumId } from '../model/drum';
 import { SLIDE_CHAR, STUTTER_CHAR } from '../model/articulation';
 
@@ -63,6 +63,9 @@ export const EMPTY_ALPHA = 0.4;
 
 /** How solid a note reads in the grid. */
 export function cellAlpha(cell: Cell): number {
+  // A STOP is not a note and not an empty step: it is an instruction, and it has
+  // to read as clearly as the note it silences or a row of silence looks empty.
+  if (cellStop(cell) !== null) return 0.8;
   if (cell.note === null) return EMPTY_ALPHA;
   return 0.45 + 0.55 * (clampVelocity(cell.velocity) / MAX_VELOCITY);
 }
@@ -133,6 +136,10 @@ export function drumCellLit(cell: Cell, lane: number): boolean {
 export function drumCellAlpha(cell: Cell, lane: number): number {
   const mine = laneIndex(cell.drum);
   if (mine >= 0) return mine === lane ? cellAlpha(cell) : EMPTY_ALPHA;
+  // A STOP silences the channel, so it is the same in every lane — and solid,
+  // because `OFF` in four lanes is a fact about the channel rather than a note
+  // that belongs to none of them.
+  if (cellStop(cell) !== null) return cellAlpha(cell);
   if (cell.note === null) return EMPTY_ALPHA;
   return cellAlpha(cell) * 0.65;
 }

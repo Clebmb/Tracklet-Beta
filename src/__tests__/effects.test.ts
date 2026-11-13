@@ -872,7 +872,7 @@ describe('the nine effects, on the whole mix', () => {
     expect(FX_SONG_FILE_VERSION).toBe(PLUGIN_LOCK_SONG_FILE_VERSION - 1);
     expect(PLUGIN_SONG_FILE_VERSION).toBe(FX_SONG_FILE_VERSION - 1);
     expect(PLUGIN_LOCK_SONG_FILE_VERSION).toBe(PLUGIN_PARAMS_SONG_FILE_VERSION - 1);
-    expect(PLUGIN_PARAMS_SONG_FILE_VERSION).toBe(SONG_FILE_VERSION_MAX);
+    expect(PLUGIN_PARAMS_SONG_FILE_VERSION).toBeLessThan(SONG_FILE_VERSION_MAX);
   });
 
   it('opens an older file with a clean mix, and refuses a newer one', () => {

@@ -388,7 +388,7 @@ describe('the word', () => {
     const missing = line('automate 2 bright 15 95');
     expect(missing.ok).toBe(false);
     if (missing.ok) return;
-    expect(missing.errors[0].message).toContain('a lane needs the bars it spans');
+    expect(missing.errors[0].message).toContain('a lane needs the range it spans');
 
     const wronged = line('automate 2 bright 15 95 bar 8 to 15');
     expect(wronged.ok).toBe(false);

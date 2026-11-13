@@ -33,6 +33,7 @@
  */
 
 import { DEFAULT_SHAPE, type FilterShape } from './shape';
+import type { WaveTable } from './wavetable';
 import {
   clampParam,
   copyVoice,
@@ -778,6 +779,19 @@ function readStoredStack(raw: unknown): Layer[] {
  * with no library gets the preset names and the waveforms, which is exactly what
  * it can know.
  */
+/**
+ * The three letters a CHANNEL's sound chip shows, with a table of its own named.
+ *
+ * `TAB` is true of every table channel and says nothing about WHICH shape it
+ * wears; a channel with a table of its own shows the table's name instead, in the
+ * same three characters the chip already has room for. Everything else is the
+ * sound's own label, so a channel without a table reads exactly as it always did.
+ */
+export function channelShortLabel(sound: StackedSound & { table?: WaveTable }, library: readonly UserVoice[] = []): string {
+  if (sound.table !== undefined) return sound.table.name.slice(0, 3).toUpperCase();
+  return soundShortLabel(sound, library);
+}
+
 export function soundShortLabel(sound: StackedSound, library: readonly UserVoice[] = []): string {
   if (sound.stack.length === 0) {
     const name = voiceNameFor(sound.voice);

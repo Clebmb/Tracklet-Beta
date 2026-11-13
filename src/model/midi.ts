@@ -438,7 +438,7 @@ function medianHold(notes: readonly MidiNote[], ticksPerStep: number): number {
  *   • one bar of sixteen steps becomes one PATTERN, and the bar order plays them
  *     in sequence.
  *
- * Whatever does not fit — a file longer than sixty-four bars, or wider than eight
+ * Whatever does not fit — a file longer than `MAX_PATTERNS` bars, or wider than eight
  * channels — is dropped and COUNTED, so the caller can say so rather than leaving
  * a silent gap.
  */

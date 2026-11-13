@@ -305,7 +305,8 @@ export class SongMenu {
   }
 
   /**
-   * `L`: mark the highlighted bar as one end of the export region.
+   * `L`: mark the highlighted bar as one end of the loop region — the bars
+   * playback repeats and the exports render.
    *
    * The gesture is two presses — the bar it starts at, then the bar it ends at —
    * and a press on the END bar takes the region off again. Which press means what

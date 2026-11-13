@@ -46,7 +46,10 @@
  * last sound.
  */
 
-import { automatedDrift, automatedGate, automatedLevel, automatedPluginParams, automatedVoice } from '../model/automation';
+import { automatedDrift, automatedGate, automatedLevel, automatedPluginParams, automatedVoice, noteClockCurve } from '../model/automation';
+import { zoneFor } from '../model/zone';
+import { seekWindow, sliceWindowFor } from '../model/slice';
+import { fadeStage, panStage } from './chain';
 import { firstLayer, patchForTrack, patchFromVoice, patchWithVoice, voiceOfPlainLayer } from '../model/instrument';
 import { channelGain } from '../model/mix';
 import { busLevelFor, channelBusLevels } from '../model/bus';
@@ -61,7 +64,9 @@ import {
   MAX_LEVEL,
   MIN_DUCK,
   patternRows,
+  lateSeconds,
   rowNotes,
+  rowStops,
   strumOffsets,
   secondsPerRow,
   songSteps,
@@ -83,7 +88,7 @@ import { buildChannelChain, buildMasterChain, type ChannelChain } from './chain'
 import { machineActive } from '../model/machine';
 import { machineBarsForSong, machineDucks, machineGain, machineHitsInRange, machineStepSeconds, padStripOptions } from './machine';
 import { buildRoom, type Room } from './room';
-import { buildNote, makeNoiseBuffer, noteLength, releaseNote, type NoteGraph } from './synth';
+import { buildNote, makeNoiseBuffer, noteLength, releaseNote, STOP_FADE, type NoteGraph } from './synth';
 import { pluginEventFor, renderPluginBuffer, resolveTrackPlugins } from './pluginVoice';
 import { resolveTrackFx } from './pluginFx';
 import type { InstrumentPlugin, PluginParamValues } from '../plugins/instrument';
@@ -446,6 +451,10 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
   // what keeps an old song's WAV byte-for-byte what it was.
   const heldByTrack: { graph: NoteGraph; startedAt: number; velocity: number }[][] =
     song.tracks.map(() => []);
+  // The step each channel last HIT on, for a lane on the note clock — the same
+  // bookkeeping the live engine keeps, so an export walks the lane step for step
+  // with the app rather than one step off it.
+  const lastHit: number[] = [];
   // One plugin per channel, resolved once up front like the sample bank: a name
   // the library does not hold is null, and the channel exports its built-in
   // voice — the performance a machine without the plugin would have played.
@@ -492,9 +501,24 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
       // step's own time, and through the same `channelGain` the app mixes with, so
       // mute and solo still win: a lane moves how LOUD a channel is, never whether
       // it is heard.
+      // The row's notes, read BEFORE the lanes for the NOTE CLOCK: a lane counted
+      // from the hit starts its walk on the step the note starts on.
+      const rowNoteList = rowNotes(target, row);
+      for (const note of rowNoteList) lastHit[note.track] = step;
+      // One curve per channel per row, built from the lanes and this bar's step
+      // length: a note-clock lane is the same shape in every bar, but a bar that
+      // runs slower walks it slower.
+      const stepSeconds = rowSecondsAt(step);
+      const brightCurveFor = (channel: number) => {
+        if (lanes.length === 0) return undefined;
+        const points = noteClockCurve(lanes, channel + 1, 'bright');
+        if (points === null || points.length < 2) return undefined;
+        return { points, stepSeconds };
+      };
       if (lanes.length > 0) {
         for (let i = 0; i < chains.length; i++) {
-          const moved = automatedLevel(lanes, i + 1, levels[i] ?? MAX_LEVEL, step, perBar);
+          const since = lastHit[i] === undefined ? null : Math.max(0, step - lastHit[i]);
+          const moved = automatedLevel(lanes, i + 1, levels[i] ?? MAX_LEVEL, step, perBar, since);
           if (moved === null) continue;
           const withLane = levels.slice();
           withLane[i] = moved;
@@ -508,7 +532,17 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
       // a chord evenly, so it needs the chord's size before it writes the first
       // note — the same count the live scheduler takes, so an export rolls the
       // same way the app did.
-      const rowNoteList = rowNotes(target, row);
+      // The row's STOPS, released before this row's notes: a step that says
+      // `off` and a step that starts a note are two different steps, but a hand
+      // written file can put both on one, and the stop belongs to what was
+      // already sounding. The fade is the model's own table, the one the live
+      // engine schedules, so a cut chops in the file exactly as it did on screen.
+      for (const stop of rowStops(target, row)) {
+        const sounding = heldByTrack[stop.track];
+        if (!sounding || sounding.length === 0) continue;
+        for (const voice of sounding) releaseNote(voice.graph, when, STOP_FADE[stop.stop]);
+        sounding.length = 0;
+      }
       const chordSize = new Map<number, number>();
       for (const note of rowNoteList) chordSize.set(note.track, (chordSize.get(note.track) ?? 0) + 1);
       const chordAt = new Map<number, number>();
@@ -579,7 +613,9 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
         // `*1` multiplies by one.
         const hits = articulationHits(note.articulation, track.glide);
         hits.forEach((hit, index) => {
-          const hitWhen = noteWhen + hit.at * length;
+          // The cell's own push, measured in ticks of THIS row, so an export lands
+          // a late snare where the app does. Zero adds nothing.
+          const hitWhen = noteWhen + lateSeconds(note.late ?? 0, rowSeconds) + hit.at * length;
           const hitLength = length * hit.length;
           // A POLYPHONIC channel runs out of voices the same way it does live, on
           // the same rule, so an export contains the notes the app played. A
@@ -640,6 +676,9 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
             // bargain: throw or empty unseats and falls through below.
             if (graph === null && bus === undefined) trackPlugins[note.track] = null;
           }
+          // The keymap's zone for this note's register, or the channel's own
+          // recording when it has no keymap. Resolved per note, like the engine's.
+          const playedName = zoneFor(track.zones ?? [], note.midi) ?? track.sample;
           if (graph === null && bus === undefined) graph = buildNote(
             ctx,
             // The lane moved the voice this note plays — the drum's or the
@@ -649,7 +688,13 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
             note.midi,
             hitWhen,
             hitLength,
-            chain.input,
+            // Where this hit sits in the field: the channel's chain still leans
+            // the strip, and this leans the hit inside it. The panner hangs off
+            // the offline context, which is thrown away when the bounce is done,
+            // so there is nothing to disconnect.
+            ((fade: AudioNode) => (note.pan ? panStage(ctx, fade, note.pan) : fade))(
+              note.fade ? fadeStage(ctx, chain.input, hitWhen, hitLength, note.fade) : chain.input,
+            ),
             noiseBuffer,
             {
               velocity: sounding,
@@ -679,8 +724,26 @@ export async function renderSongToPcm(song: Song, options: RenderOptions = {}): 
               // The channel's own recording, resolved from the bank the export was
               // handed — the same lookup the engine made, so what you heard is
               // what you get.
-              sample: sampleByName(options.samples ?? NO_SAMPLES, track.sample),
-              sampleWindow: windowFor(sampleByName(options.samples ?? NO_SAMPLES, track.sample)),
+              // The keymap's zone for this note's register, or the channel's own
+              // recording — the same fallback the engine makes, from the same list,
+              // so an export plays the keymap the app plays.
+              sample: sampleByName(options.samples ?? NO_SAMPLES, playedName),
+              // The piece this note lands on, when the channel is sliced — the same
+              // window the app plays, resolved from the same model.
+              // The same window the app plays, then the cell's own seek INSIDE it,
+              // from the same function — so an export starts where the app does.
+              sampleWindow: (() => {
+                const window = sliceWindowFor(track.slices ?? [], note.midi)
+                  ?? windowFor(sampleByName(options.samples ?? NO_SAMPLES, playedName));
+                return window ? seekWindow(window, note.start ?? 0) : window;
+              })(),
+              // A brightness lane on the note clock, walked across this note's
+              // filter — the same points the app would schedule, at the step length
+              // of the bar this note sits in, so an export moves with the song.
+              brightCurve: brightCurveFor(note.track),
+              // The channel's own table, so an export wears the same spectrum the
+              // app does — and the bank where it wrote none.
+              table: track.table?.harmonics ?? undefined,
             },
           );
           // An isolated bus that came back empty holds nothing to steal or

@@ -72,6 +72,74 @@ async function replayReaches(before: Song, result: DiffResult, after: Song): Pro
   return text((applied.result as { song: Song }).song) === text(after);
 }
 
+describe('what a channel PLAYS travels whole', () => {
+  it('carries a keymap, a chop and a table, and replays into the same song', async () => {
+    const before = subject();
+    const after = subject();
+    after.tracks[0].zones = [
+      { note: 36, sample: 'LOW' },
+      { note: 60, sample: 'HIGH' },
+    ];
+    after.tracks[0].slices = [
+      { start: 0, end: 0.42 },
+      { start: 0.42, end: 0.9 },
+    ];
+    after.tracks[0].table = { name: 'ODD', harmonics: [1, 0, 0.5] };
+    const result = await diff(before, after);
+    const edit = result.edits.find((one) => one.op === 'track.set' && one.track === 1);
+    expect(edit?.zones).toEqual([
+      { note: 36, sample: 'LOW' },
+      { note: 60, sample: 'HIGH' },
+    ]);
+    expect(edit?.slices).toEqual([
+      { start: 0, end: 0.42 },
+      { start: 0.42, end: 0.9 },
+    ]);
+    expect(edit?.table).toEqual({ name: 'ODD', harmonics: [1, 0, 0.5] });
+    // And the point of the whole file: the edits turn `before` into `after`.
+    expect(await replayReaches(before, result, after)).toBe(true);
+  });
+
+  it('clears them with an empty list and a null table', async () => {
+    const before = subject();
+    before.tracks[0].zones = [{ note: 60, sample: 'HIGH' }];
+    before.tracks[0].slices = [{ start: 0, end: 0.4 }];
+    before.tracks[0].table = { name: 'ODD', harmonics: [1, 0.5] };
+    const after = subject();
+    const result = await diff(before, after);
+    const edit = result.edits.find((one) => one.op === 'track.set' && one.track === 1);
+    expect(edit?.zones).toEqual([]);
+    expect(edit?.slices).toEqual([]);
+    expect(edit?.table).toBe(null);
+    expect(await replayReaches(before, result, after)).toBe(true);
+  });
+});
+
+describe('a channel\u2019s sound is visible to an agent', () => {
+  it('reports the recording, the keymap, the chops and the table', async () => {
+    const before = subject();
+    const song = subject();
+    song.tracks[0].sample = 'WHOLE';
+    song.tracks[0].zones = [{ note: 60, sample: 'HIGH' }];
+    song.tracks[0].slices = [{ start: 0, end: 0.42 }];
+    song.tracks[0].table = { name: 'ODD', harmonics: [1, 0, 0.5] };
+    const result = await callOperation('song.describe', { song });
+    if (!result.ok) throw new Error('describe failed');
+    const described = (result.result as { trackList: { track: number; plays: unknown }[] }).trackList[0];
+    expect(described.plays).toEqual({
+      sample: 'WHOLE',
+      keymap: [{ note: 60, sample: 'HIGH' }],
+      slices: [{ start: 0, end: 0.42 }],
+      table: 'ODD',
+    });
+    // And a plain channel says so, rather than saying nothing.
+    const plainResult = await callOperation('song.describe', { song: before });
+    if (!plainResult.ok) throw new Error('describe failed');
+    const plain = plainResult.result as { trackList: { plays: unknown }[] };
+    expect(plain.trackList[0].plays).toEqual({ sample: null, keymap: [], slices: [], table: null });
+  });
+});
+
 describe('the diff is an edit list that replays', () => {
   it('says nothing changed, and verifies it, for a song against itself', async () => {
     const result = await diff(subject(), subject());

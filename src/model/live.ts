@@ -34,10 +34,13 @@
  * Phaser-free and audio-free like the rest of `model/`.
  */
 
-import { patternRows, rowNotes, stepToSlot, type Song } from './song';
+import { patternRows, rowNotes, rowStops, stepToSlot, type Song } from './song';
 
 /** The notes one step of a bar sounds — the shape `rowNotes` answers with. */
 export type LiveNote = ReturnType<typeof rowNotes>[number];
+
+/** A stop one step of a bar makes — the shape `rowStops` answers with. */
+export type LiveStop = ReturnType<typeof rowStops>[number];
 
 /**
  * A launch that takes over at a step.
@@ -217,6 +220,50 @@ export function stepNotes(
   if (scene !== null) return sceneStepNotes(song, scene, absoluteStep);
   const { pattern, row } = stepToSlot(song, step);
   return rowNotes(song.patterns[pattern], row);
+}
+
+/**
+ * The stops one step of a performing scene makes.
+ *
+ * The exact mirror of `sceneStepNotes`, and for the same reason: a scene says
+ * what each channel plays, so a stop written in another channel's borrowed
+ * pattern is not this scene's. Performing a scene whose pad clip says `off` has
+ * to stop that pad, or the live page and the export would disagree about where
+ * a note ends — which is the one thing this file exists to prevent.
+ */
+export function sceneStepStops(song: Song, sceneIndex: number, step: number): LiveStop[] {
+  const scene = song.scenes[Math.round(sceneIndex)];
+  if (!scene) return [];
+  const row = liveRowAt(step, patternRows(song));
+  const out: LiveStop[] = [];
+  scene.clips.forEach((clip, channel) => {
+    if (clip === null) return;
+    const pattern = song.patterns[clip - 1];
+    if (!pattern) return;
+    for (const stop of rowStops(pattern, row)) {
+      if (stop.track === channel) out.push(stop);
+    }
+  });
+  return out;
+}
+
+/**
+ * The stops one step of the PERFORMANCE makes: the active scene, or the order.
+ *
+ * The third of the three questions the scheduler asks the model per step, beside
+ * `stepNotes` and the drum machine's hits, and answered from the same step
+ * readings so a stop lands exactly where a note does.
+ */
+export function stepStops(
+  song: Song,
+  cues: readonly LiveCue[],
+  step: number,
+  absoluteStep: number,
+): LiveStop[] {
+  const scene = activeScene(cues, absoluteStep);
+  if (scene !== null) return sceneStepStops(song, scene, step);
+  const { pattern, row } = stepToSlot(song, step);
+  return rowStops(song.patterns[pattern], row);
 }
 
 /**

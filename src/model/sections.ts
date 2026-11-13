@@ -52,16 +52,17 @@ import { MAX_MACHINE_BARS } from './machine';
 /**
  * How many sections a song may define.
  *
- * Twenty-four, and the number is a form rather than a file size: pop songs use
- * five (intro, verse, chorus, bridge, outro) and a long-form piece with movements
- * uses ten to twenty, while a song with more than twenty-four named parts is a
- * structure whose names are not helping anyone. It is also small enough that the
- * `F3` form view can list them all.
+ * The number is a form rather than a file size: pop songs use five (intro, verse,
+ * chorus, bridge, outro) and a long-form piece with movements uses ten to twenty,
+ * while a song with more named parts than this is a structure whose names are not
+ * helping anyone.
  *
  * Sixteen until a 36-pattern orchestral piece needed fifteen named movements plus
- * room to grow; the cap is a guard against a form nobody can read, not a budget.
+ * room to grow, then twenty-four; forty-eight now, because a song that can hold
+ * 256 bars can hold a longer form, and a form is the one thing here a person
+ * reads as a list. The cap stays a guard against a form nobody can read.
  */
-export const MAX_SECTIONS = 24;
+export const MAX_SECTIONS = 48;
 
 /**
  * How long a section name may be, in characters.

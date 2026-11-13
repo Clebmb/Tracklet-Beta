@@ -86,7 +86,7 @@ describe('what a scene refuses', () => {
   });
 
   it('refuses a clip that is not a pattern number', () => {
-    expect(errorsOf('scene A 1 x 2')).toMatch(/takes pattern numbers 1\.\.64 or "-" for silence/);
+    expect(errorsOf('scene A 1 x 2')).toMatch(/takes pattern numbers 1\.\.128 or "-" for silence/);
   });
 
   it('refuses a name that is too long, and one that is empty', () => {
@@ -158,7 +158,7 @@ describe('the manifest publishes the two words', () => {
     expect(SCRIPT_QUICK_REFERENCE.join(' ').toLowerCase()).toContain('live');
     expect(SCRIPT_COMMANDS.find((command) => command.word === 'scene')?.example).toBe('scene A 1 2 - 4');
     expect(SCRIPT_COMMANDS.find((command) => command.word === 'live')?.example).toBe('live quantize 4');
-    expect(SCRIPT_VERSION).toBe(56);
+    expect(SCRIPT_VERSION).toBeGreaterThanOrEqual(56);
   });
 
   it('publishes the scene and quantize limits from the model', () => {

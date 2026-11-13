@@ -30,7 +30,7 @@
  * offline renderer cannot drift apart.
  */
 
-import { clampGlide, clampVelocity, clampVibrato, MAX_VELOCITY } from '../model/song';
+import { clampGlide, clampVelocity, clampVibrato, MAX_VELOCITY, type StopId } from '../model/song';
 import { DEFAULT_TUNING, tuningFor, tunedFreq, type Tuning } from '../model/tuning';
 import { clampParam, MAX_PARAM } from '../model/voice';
 import { DEFAULT_SHAPE, type FilterShape } from '../model/shape';
@@ -92,9 +92,42 @@ export const VIBRATO_CENTS = 40;
  * channel's glide and vibrato — and they arrive together because they are the
  * same kind of thing: everything about a note that is not the note.
  */
+/**
+ * A lane's points carried into one note, so the filter walks them while it plays.
+ *
+ * `step` is steps since the hit and `value` is the knob's own 0..100 reading; the
+ * builder turns each into a cutoff and schedules it at `at + step * stepSeconds`.
+ * The note knows nothing about lanes — it is handed a curve, which is what lets
+ * the same curve come from a song's `automate … note` line, a diff, or a test.
+ */
+export interface BrightCurve {
+  points: readonly { step: number; value: number }[];
+  /** How long one step of the song is, in seconds at this note's tempo. */
+  stepSeconds: number;
+}
+
 export interface NoteOptions {
   /** How hard the note is hit, 0..100. Defaults to full. */
   velocity?: number;
+  /**
+   * A per-note brightness lane, walked across this note's own filter.
+   *
+   * Absent is every note written before the note clock existed: one cutoff set at
+   * the note's start, or the sweep envelope, which is what `sweep` has always done.
+   * A curve REPLACES the sweep for this note rather than stacking on it — both are
+   * claims on one cutoff, and two ramps on one parameter is a note that sounds
+   * like whichever was scheduled last.
+   */
+  brightCurve?: BrightCurve;
+  /**
+   * A channel's OWN wavetable: harmonic amplitudes from the fundamental upward.
+   *
+   * Read only by a `wave table` channel, where it replaces the bank entry a `duty`
+   * picks — same voice, same knobs, a shape the author wrote instead of one the
+   * console chose. Absent is every table channel written before a table could be
+   * your own, and it plays the bank exactly as it always did.
+   */
+  table?: readonly number[];
   /** How much of the note's length is spent sliding into pitch, 0..100. */
   glide?: number;
   /** The pitch the slide starts from, or null when there is nothing to slide from. */
@@ -217,6 +250,10 @@ interface NoteExpression {
    * the one note it describes.
    */
   drum: DrumId | null;
+  /** A per-note brightness lane for this note, or null. See `NoteOptions`. */
+  brightCurve: BrightCurve | null;
+  /** The channel's own table, or null for the chip bank. See `NoteOptions.table`. */
+  table: readonly number[] | null;
   /** The recording this note's channel named and the app has, or null. */
   sample: Sample | null;
   /** The part of that recording the note plays, or null for the whole file. */
@@ -237,6 +274,24 @@ export interface ScheduledNote {
   track: number;
   midi: number;
   velocity: number;
+  /**
+   * How late the hit lands, in TICKS of its step — `0` on the step itself.
+   *
+   * Carried rather than looked up, like velocity: the sequencer that queued this
+   * note decides when it sounds. Optional so a caller that only has a pitch (a
+   * preview, a test) needs no opinion about timing.
+   */
+  late?: number;
+  /** How far into that window the hit begins, as a percentage (0..95). `0` or
+   * absent begins at the window's own start, which is every cell that never
+   * asked — so a song that never seeks is not moved by this existing. */
+  start?: number;
+  /** Where the hit sits between the speakers, -100..100, relative to the
+   * channel. `0` or absent is no lean of its own — every cell before this. */
+  pan?: number;
+  /** How much of the note's length it fades through, as a percentage. `0` or
+   * absent leaves the envelope exactly as it was. */
+  fade?: number;
   /**
    * How this note is PLAYED rather than what pitch it is: `>` slides into it,
    * `*3` hits it three times inside its own length. See
@@ -276,6 +331,18 @@ export const VOICE_PEAK = 0.22;
 
 /** A note rings for this share of its step, leaving a small gap between steps. */
 export const NOTE_FILL = 0.9;
+
+/**
+ * How fast a STOP silences a voice: `off` lets go, `cut` bites it off.
+ *
+ * One table rather than a number in each of the two audio paths, because a pad
+ * that faded in a file differently from the app would be a bug nobody could hear
+ * until they compared the two. `off` is a short release — long enough that the
+ * note falls away instead of clicking, short enough that the step after it is
+ * clean; `cut` is the shortest fade that does not click, which is what a mute
+ * group is.
+ */
+export const STOP_FADE: Record<StopId, number> = { off: 0.06, cut: 0.004 };
 
 /** Everything one sounding note is made of, so a caller can unplug it. */
 export interface NoteGraph {
@@ -589,6 +656,13 @@ export function waveTableFor(duty: number): ChipWaveTable {
 /** One table per context, because a Fourier series is not free and a bank is fixed. */
 const TABLE_WAVES = new WeakMap<BaseAudioContext, Map<number, PeriodicWave>>();
 
+/**
+ * Custom tables, cached per context and keyed by the SPECTRUM rather than by a
+ * name: two channels that wrote the same amplitudes share one wave, and redefining
+ * a table that sounds different gets a different entry.
+ */
+const CUSTOM_WAVES = new WeakMap<BaseAudioContext, Map<string, PeriodicWave>>();
+
 /** A chip wavetable as a `PeriodicWave` the oscillators can wear. */
 export function wavetablePeriodicWave(ctx: BaseAudioContext, duty: number): PeriodicWave {
   const index = waveTableIndexFor(duty);
@@ -605,6 +679,33 @@ export function wavetablePeriodicWave(ctx: BaseAudioContext, duty: number): Peri
   for (let n = 1; n < harmonics.length; n++) imag[n] = harmonics[n];
   const wave = ctx.createPeriodicWave(real, imag);
   tables.set(index, wave);
+  return wave;
+}
+
+/**
+ * A table of YOUR OWN as a `PeriodicWave`: a spectrum written as amplitudes.
+ *
+ * `harmonics[0]` is the fundamental, so the loop starts at 1 and the imaginary
+ * part carries each amplitude — the same construction `wavetablePeriodicWave`
+ * uses for the bank, which is what makes a custom table the bank's equal rather
+ * than a second kind of wave. Cached by the spectrum itself, because a channel's
+ * table is fixed for the life of the song and a note is built per step.
+ */
+export function customPeriodicWave(ctx: BaseAudioContext, harmonics: readonly number[]): PeriodicWave {
+  let waves = CUSTOM_WAVES.get(ctx);
+  if (!waves) {
+    waves = new Map();
+    CUSTOM_WAVES.set(ctx, waves);
+  }
+  const key = harmonics.map((value) => value.toFixed(4)).join(',');
+  const cached = waves.get(key);
+  if (cached) return cached;
+  const count = Math.max(2, harmonics.length + 1);
+  const real = new Float32Array(count);
+  const imag = new Float32Array(count);
+  for (let n = 1; n < count; n++) imag[n] = harmonics[n - 1] ?? 0;
+  const wave = ctx.createPeriodicWave(real, imag);
+  waves.set(key, wave);
   return wave;
 }
 
@@ -2415,7 +2516,22 @@ function buildLayer(
   // written before this knob existed is the same steady tone it was. Above it,
   // the note OPENS wide and closes down to `bright` as it decays, which is what
   // turns a plain tone into a pluck, a wah or a swelling pad.
-  if (layer.sweep > 0) {
+  // A NOTE-CLOCK lane wins over both: it is a walk of its own, across the note,
+  // and the two would otherwise fight over one parameter. Its points are absolute
+  // knob readings, so the note's own `bright` is the first thing it replaces.
+  const curve = expression.brightCurve;
+  if (curve !== null && curve.points.length > 1) {
+    const first = curve.points[0];
+    filter.frequency.setValueAtTime(cutoffFor(clampParam(first.value)), at);
+    for (let i = 1; i < curve.points.length; i++) {
+      const point = curve.points[i];
+      const when = at + Math.max(0, point.step - first.step) * curve.stepSeconds;
+      // `exponentialRampToValueAtTime` cannot reach zero, and a cutoff of zero is
+      // silence rather than a filter — one hertz is the floor, which is already
+      // below anything a person hears.
+      filter.frequency.exponentialRampToValueAtTime(Math.max(1, cutoffFor(clampParam(point.value))), when);
+    }
+  } else if (layer.sweep > 0) {
     filter.frequency.setValueAtTime(sweepOpenFor(bright, layer.sweep), at);
     filter.frequency.exponentialRampToValueAtTime(cutoff, decayDone);
   } else {
@@ -2634,7 +2750,14 @@ function buildLayer(
     // A TABLE and a FORMANT both wear a PeriodicWave whose choice `duty` makes:
     // the table's place in its bank, or the vowel. One knob, and the wave says
     // what it means.
-    if (layer.wave === 'table') osc.setPeriodicWave(wavetablePeriodicWave(ctx, layer.duty));
+    // A channel with a table of its OWN wears that spectrum; every other table
+    // channel keeps the bank entry its `duty` picks, which is what this line did
+    // before a custom table could exist.
+    if (layer.wave === 'table') {
+      osc.setPeriodicWave(expression.table !== null && expression.table.length > 0
+        ? customPeriodicWave(ctx, expression.table)
+        : wavetablePeriodicWave(ctx, layer.duty));
+    }
     else if (layer.wave === 'formant') osc.setPeriodicWave(formantPeriodicWave(ctx, layer.duty));
     else if (layer.wave === 'reed') osc.setPeriodicWave(reedPeriodicWave(ctx, layer.duty));
     else if (layer.wave === 'brass') osc.setPeriodicWave(brassPeriodicWave(ctx, layer.duty));
@@ -2851,6 +2974,8 @@ export function buildNote(
     drum: options.drum ?? null,
     sample: options.sample ?? null,
     sampleWindow: options.sampleWindow ?? null,
+    brightCurve: options.brightCurve ?? null,
+    table: options.table ?? null,
     hz: () => 0,
   };
   // Bound once, here, so every layer of a stacked patch is tuned together and

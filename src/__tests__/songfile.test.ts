@@ -231,7 +231,7 @@ describe('writing a song as a script', () => {
     file.patterns[1].steps[3][0] = 76;
     const older = songFromJson(JSON.stringify(file));
     if (!older.ok) throw new Error(older.errors.join(' / '));
-    expect(older.song.patterns[1].steps[3][0]).toEqual({ note: 76, extra: [], drum: null, velocity: 100, slide: false, stutter: 1, grace: 0, bend: 0 });
+    expect(older.song.patterns[1].steps[3][0]).toEqual({ note: 76, extra: [], drum: null, gesture: null, velocity: 100, slide: false, stutter: 1, grace: 0, bend: 0 });
   });
 
   it('clamps a wild velocity in a file, and refuses one that is not a number', () => {
@@ -653,9 +653,11 @@ describe('reading a file that is wrong', () => {
   });
 
   it('refuses more channels or patterns than a song can hold', () => {
-    const nine = Array.from({ length: 9 }, (_, i) => ({ name: `T${i}`, wave: 'sine', muted: false }));
-    expect(refusal({ ...file(), tracks: nine })).toContain('1 to 8 channels');
-    expect(refusal({ ...file(), patterns: [] })).toContain('1 to 64 patterns');
+    // Sixteen is the ceiling now, so the refusal starts at seventeen — nine
+    // channels is an ordinary song, and it writes file version 57.
+    const seventeen = Array.from({ length: 17 }, (_, i) => ({ name: `T${i}`, wave: 'sine', muted: false }));
+    expect(refusal({ ...file(), tracks: seventeen })).toContain('1 to 16 channels');
+    expect(refusal({ ...file(), patterns: [] })).toContain('1 to 128 patterns');
   });
 
   it('refuses a missing grid or a step that is not a row', () => {

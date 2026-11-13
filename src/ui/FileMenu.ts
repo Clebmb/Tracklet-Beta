@@ -183,6 +183,8 @@ export interface FileMenuHandlers {
   removeInstrument?: (id: string) => FileActionResult;
   /** The song as a Tracklet Script, for SAVE AS SCRIPT. */
   scriptText?: () => string;
+  /** Make a link that carries the song, copy it, and say so — or say why not. */
+  shareLink?: () => FileActionResult;
   /** The song as a Tracklet song file, for SAVE AS JSON. */
   jsonText?: () => string;
   /**
@@ -595,6 +597,11 @@ export class FileMenu {
         run: () => this.save(SONG_FILE_EXTENSION, 'application/json', () => this.handlers.jsonText?.()),
       },
       {
+        label: 'SHARE AS LINK',
+        description: 'Put this song in the address bar and copy it: the music lives in the link\u2019s own `#s=` fragment, which no web server ever sees, so nothing is uploaded and the link works offline. A song too long to be a link says so instead of being cut short \u2014 use PACK SAVE for that one.',
+        run: () => this.report(this.handlers.shareLink?.() ?? null),
+      },
+      {
         label: 'PLUGINS...',
         description: 'The plugin bundles installed on this machine: what each one asked for, what this machine allowed, and what it costs. ENTER allows the next pending word, X takes one back, and two presses of DEL forget one entirely — the song keeps naming it and falls back.',
         run: () => { this.report(this.handlers.openPlugins?.() ?? null); this.hide(); },
@@ -651,7 +658,7 @@ export class FileMenu {
       },
       {
         label: `RENDER: ${this.handlers.bounceLabel?.() ?? 'THE WHOLE SONG'}`,
-        description: 'Which BARS an export renders. `THE WHOLE SONG` is everything the order plays; a region — `BARS 8-15` — renders only those bars, and you mark one in `F3` with `L`, or with `export bars 8 to 15` in a script. Press ENTER to go back to the whole song.',
+        description: 'Which BARS an export renders and playback LOOPS. `THE WHOLE SONG` is everything the order plays; a region — `BARS 8-15` — plays and renders only those bars, and you mark one in `F3` with `L`, or with `export bars 8 to 15` in a script. Press ENTER to go back to the whole song.',
         run: () => { this.report(this.handlers.clearBounce?.() ?? null); },
       },
       {

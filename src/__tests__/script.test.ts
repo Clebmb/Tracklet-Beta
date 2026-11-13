@@ -580,7 +580,7 @@ describe('applying a script', () => {
     // The grid spelling: the note, a `~`, and how hard it is hit.
     // A plain note is a plain note: no slide, one hit, which is what every cell
     // in every song this app has ever played is.
-    const plain = { extra: [], drum: null, slide: false, stutter: 1, grace: 0, bend: 0 };
+    const plain = { extra: [], drum: null, gesture: null, slide: false, stutter: 1, grace: 0, bend: 0 };
     expect(applied('tracks 2\nC-4~40 .').song.patterns[0].steps[0][0]).toEqual({ note: 60, velocity: 40, ...plain });
     // The command spelling, with the velocity as a fourth value...
     expect(applied('tracks 2\nnote 0 1 C-4 40').song.patterns[0].steps[0][0]).toEqual({ note: 60, velocity: 40, ...plain });
@@ -678,7 +678,7 @@ describe('applying a script', () => {
   });
 
   it('refuses an order it cannot read, and says which value was wrong', () => {
-    expect(refused('order 0').errors[0].message).toMatch(/pattern numbers 1\.\.64; got "0"/);
+    expect(refused('order 0').errors[0].message).toMatch(/pattern numbers 1\.\.128; got "0"/);
     expect(refused('order 1 foo').errors[0].message).toMatch(/got "foo"/);
     expect(refused('order').errors[0].message).toMatch(/at least one pattern number/);
   });

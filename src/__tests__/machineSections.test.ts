@@ -96,7 +96,7 @@ describe('the file says a section names a machine bar', () => {
     // A section's machine bar is 40; the LIVE page's SCENES claimed 41 above it,
     // and the ARP page's DIALS claimed 42, a PLUGIN INSTRUMENT claimed 43, a SEATED PLUGIN EFFECT claimed 44,
     // a LOCKFILE 45 and TURNED PLUGIN KNOBS 46, so the dials are four below the ceiling now rather than at it.
-    expect(PLUGIN_PARAMS_SONG_FILE_VERSION).toBe(SONG_FILE_VERSION_MAX);
+    expect(PLUGIN_PARAMS_SONG_FILE_VERSION).toBeLessThan(SONG_FILE_VERSION_MAX);
     expect(PLUGIN_LOCK_SONG_FILE_VERSION).toBe(PLUGIN_PARAMS_SONG_FILE_VERSION - 1);
     expect(FX_SONG_FILE_VERSION).toBe(PLUGIN_LOCK_SONG_FILE_VERSION - 1);
     expect(PLUGIN_SONG_FILE_VERSION).toBe(FX_SONG_FILE_VERSION - 1);

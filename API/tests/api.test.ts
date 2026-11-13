@@ -203,6 +203,38 @@ describe('songs', () => {
     expect(grid.text).toContain('kick');
   });
 
+  it('counts the cells that carry a clause, so an agent can check its phrasing landed', async () => {
+    // `notes` cannot answer this: twenty pushes change no pitch at all, and a grid
+    // is six hundred characters of proof nobody reads.
+    const plain = unwrap<{ song: Record<string, unknown> }>(await api.script.apply({ script: 'grid 16\nC-4 . . .' }));
+    const described = unwrap<{ gestures: number }>(await api.song.describe({ song: plain.song }));
+    expect(described.gestures).toBe(0);
+    const phrased = unwrap<{ song: Record<string, unknown> }>(
+      await api.script.apply({ script: 'grid 16\nC-4:late2:pan-30 . . .\nC-4 . . .\nC-4:seek25 . . .' }),
+    );
+    const after = unwrap<{ gestures: number; notes: number }>(await api.song.describe({ song: phrased.song }));
+    expect(after.gestures).toBe(2);
+    // Two cells moved; the note COUNT is untouched, which is the whole point —
+    // the same three notes with no clauses count the same three.
+    const bare = unwrap<{ song: Record<string, unknown> }>(
+      await api.script.apply({ script: 'grid 16\nC-4 . . .\nC-4 . . .\nC-4 . . .' }),
+    );
+    expect(after.notes).toBe(unwrap<{ notes: number }>(await api.song.describe({ song: bare.song })).notes);
+  });
+
+  it('prints a cell’s clauses in the spelling the parser reads', async () => {
+    // A grid that printed `C-4` for a hit written `C-4:late2` would hide what the
+    // last lines of the script said — so the printed token IS the script token.
+    const applied = unwrap<{ song: Record<string, unknown> }>(
+      await api.script.apply({ script: 'grid 16\nC-4:late2:pan-30 . . .' }),
+    );
+    const grid = unwrap<{ text: string }>(await api.song.grid({ song: applied.song, pattern: 1 }));
+    expect(grid.text).toContain('C-4:late2:pan-30');
+    // And what is printed applies back to the song it came from, unchanged.
+    const again = unwrap<{ song: Record<string, unknown> }>(await api.script.apply({ script: 'grid 16\nC-4:late2:pan-30 . . .' }));
+    expect(again.song).toEqual(applied.song);
+  });
+
   it('round-trips a song through JSON', async () => {
     const applied = unwrap<{ song: unknown }>(await api.script.apply({ script: GOOD_SCRIPT }));
     const written = unwrap<{ json: string }>(await api.song.to_json({ song: applied.song }));

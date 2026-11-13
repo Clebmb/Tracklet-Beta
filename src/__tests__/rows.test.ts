@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   applyScript,
   createSong,
+  fillRange,
+  interpolateRange,
+  MAX_TRANSPOSE,
+  MIN_TRANSPOSE,
+  transposeRange,
   MAX_OCTAVE_SHIFT,
   MAX_ROWS,
   MIDI_MAX,
@@ -142,9 +147,9 @@ describe('the range, as arithmetic', () => {
 
   it('carries everything a cell holds into every copy', () => {
     const pattern = patternOf(16);
-    pattern.steps[0][0] = { note: 60, extra: [], drum: null, velocity: 40, slide: true, stutter: 3, grace: 0, bend: 0 };
+    pattern.steps[0][0] = { note: 60, extra: [], drum: null, gesture: null, velocity: 40, slide: true, stutter: 3, grace: 0, bend: 0 };
     repeatRange(pattern, { from: 0, to: 3 }, 2);
-    expect(pattern.steps[4][0]).toEqual({ note: 60, extra: [], drum: null, velocity: 40, slide: true, stutter: 3, grace: 0, bend: 0 });
+    expect(pattern.steps[4][0]).toEqual({ note: 60, extra: [], drum: null, gesture: null, velocity: 40, slide: true, stutter: 3, grace: 0, bend: 0 });
     // A copy is a copy, not a second reference to the same cell.
     pattern.steps[4][0].velocity = 90;
     expect(pattern.steps[0][0].velocity).toBe(40);
@@ -348,9 +353,14 @@ describe('the language and the manifest', () => {
     // Every published transformation, applied — the manifest cannot describe a
     // word the parser does not take.
     for (const one of caps.vocabulary.rowTransforms) {
-      const count = one.id === 'repeat' ? ' 2' : '';
+      const count = one.id === 'repeat' || one.id === 'transpose' ? ' 2' : '';
       expect(applied(`tracks 1\nC-4\nrows 0 to 0 ${one.words}${count}`)).toBeTruthy();
     }
+  });
+
+  it('publishes the semitone range `transpose` clamps to', () => {
+    const caps = scriptCapabilities();
+    expect(caps.limits.rows.transpose).toEqual({ min: MIN_TRANSPOSE, max: MAX_TRANSPOSE });
   });
 
   it('is a run of steps rather than a limit on how long one may be', () => {
@@ -361,5 +371,77 @@ describe('the language and the manifest', () => {
     const range: RowRange = { from: MAX_ROWS - 4, to: MAX_ROWS - 1 };
     expect(rowRangeProblem(range, MAX_ROWS)).toBeNull();
     expect(rowRangeProblem(range, MAX_ROWS - 1)).not.toBeNull();
+  });
+});
+
+describe('the three a range gained for writing a song', () => {
+  it('moves a run by semitones, and by twelve when it says octave', () => {
+    const pattern = patternOf(4);
+    pattern.steps[0][0].note = 60;
+    pattern.steps[1][0].note = 62;
+    expect(transposeRange(pattern, { from: 0, to: 1 }, 2)).toBe(2);
+    expect([pattern.steps[0][0].note, pattern.steps[1][0].note]).toEqual([62, 64]);
+    // The sign is the direction, and an octave is twelve of these — the two share
+    // one function, so they cannot drift.
+    expect(transposeRange(pattern, { from: 0, to: 0 }, -12)).toBe(1);
+    expect(pattern.steps[0][0].note).toBe(50);
+    expect(transposeRange(pattern, { from: 0, to: 0 }, 0)).toBe(0);
+  });
+
+  it('moves a chord whole and leaves a drum where it is', () => {
+    // Two channels, because the drum sits on one of its own: a transpose moves
+    // pitches and percussion has none.
+    const pattern = applied('tracks 2\nsteps 4').patterns[0];
+    pattern.steps[0][0].note = 60;
+    pattern.steps[0][0].extra = [64, 67];
+    pattern.steps[0][1].note = 36;
+    pattern.steps[0][1].drum = 'kick';
+    transposeRange(pattern, { from: 0, to: 0 }, 1);
+    expect([pattern.steps[0][0].note, ...pattern.steps[0][0].extra]).toEqual([61, 65, 68]);
+    expect(pattern.steps[0][1].note).toBe(36);
+  });
+
+  it('clamps at the edge of the range rather than refusing', () => {
+    const pattern = patternOf(2);
+    pattern.steps[0][0].note = 119;
+    transposeRange(pattern, { from: 0, to: 0 }, MAX_TRANSPOSE);
+    expect(pattern.steps[0][0].note).toBe(119);
+  });
+
+  it('fills from the note already playing, and never over music', () => {
+    const pattern = patternOf(8);
+    pattern.steps[0][0].note = 60;
+    pattern.steps[2][0].note = 64;
+    expect(fillRange(pattern, { from: 1, to: 4 })).toBe(3);
+    expect(pattern.steps.slice(1, 5).map((row) => row[0].note)).toEqual([60, 64, 64, 64]);
+    // A stop ends the run it sits in: the steps after it are not filled, which is
+    // the difference between "keep playing" and "keep playing through a stop".
+    const stopped = patternOf(8);
+    stopped.steps[0][0].note = 60;
+    stopped.steps[2][0].gesture = 'off';
+    fillRange(stopped, { from: 0, to: 5 });
+    expect(stopped.steps[1][0].note).toBe(60);
+    expect(stopped.steps[3][0].note).toBeNull();
+  });
+
+  it('draws a line between the range’s first and last note', () => {
+    const pattern = patternOf(8);
+    pattern.steps[0][0].note = 60;
+    pattern.steps[4][0].note = 67;
+    expect(interpolateRange(pattern, { from: 0, to: 4 })).toBe(3);
+    expect(pattern.steps.slice(0, 5).map((row) => row[0].note)).toEqual([60, 62, 64, 65, 67]);
+    // One anchor is no line at all: the range answers with silence, not a guess.
+    const one = patternOf(8);
+    one.steps[2][0].note = 60;
+    expect(interpolateRange(one, { from: 0, to: 7 })).toBe(0);
+  });
+
+  it('says the three words in the language, and refuses them wrong', () => {
+    const moved = applied('tracks 1\nC-4\nC-4\nrows 0 to 1 transpose 2');
+    expect(moved.patterns[0].steps[0][0].note).toBe(62);
+    expect(refused('tracks 1\nC-4\nrows 0 to 0 transpose 0')).toContain('not 0');
+    expect(refused('tracks 1\nC-4\nrows 0 to 0 transpose')).toContain('how many semitones');
+    expect(refused('tracks 1\nC-4\nrows 0 to 0 fill 3')).toContain('takes nothing else');
+    expect(refused('tracks 1\nC-4\nrows 0 to 0 interpolate now')).toContain('takes nothing else');
   });
 });

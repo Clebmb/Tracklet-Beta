@@ -461,6 +461,8 @@ describe('the doc folder', () => {
         // than spelling the four words a second time here. The suffix is cut the
         // same way §2 spells it — the gesture and the force come off the word.
         if (isDrumName(head.replace(/[>*~!].*$/, ''))) continue;
+        // And a STOP is a cell too: `off` or `cut` alone in a column.
+        if (head === 'off' || head === 'cut') continue;
         // A cell, in every shape §2 documents: one pitch or a comma run of them,
         // then the articulation (`>`, `*N` and/or `!`/`!!`) and the `~velocity`
         // in either order.

@@ -453,14 +453,18 @@ Bytes in, answers out; the Blob-URL crossing is injected, never assumed.
 Bytes in, answers out; the scene collects the parts and acts on them.
 
 - `BUNDLE_SONG_NAME` (`song.json`) / `BUNDLE_PLUGIN_DIR` (`plugins`) /
-  `BUNDLE_SAMPLE_DIR` (`samples`) — the flat layout: the song, one
-  `manifest.json` plus module source per `plugins/<id>/`, one `.wav` per
-  `samples/<NAME>.wav`.
+  `BUNDLE_SAMPLE_DIR` (`samples`) / `BUNDLE_KIT_DIR` (`kits`) — the flat layout:
+  the song, one `manifest.json` plus module source per `plugins/<id>/`, one `.wav`
+  per `samples/<NAME>.wav`, and one `kits/<NAME>.json` for a KIT OF YOUR OWN the
+  song names. The kit is packed because a song carries only its kit's NAME: without
+  the voices a bundle arrived with the right name and the wrong drums, falling back
+  to a preset and saying nothing. A kit file that does not parse refuses the whole
+  bundle, which is the plugins' rule one folder over.
 - `songBundleFileName(stem)` — `<stem>.tracklet-bundle.zip`, beside `<stem>.json`.
 - `bundleSampleName(name)` — the file a recording travels under, path
   characters folded.
-- `buildSongBundle({ songJson, plugins, samples })` — pack the three; a song
-  naming nothing packs its JSON alone and still opens.
+- `buildSongBundle({ songJson, plugins, samples, kits })` — pack the four (kits
+  optional); a song naming nothing packs its JSON alone and still opens.
 - `parseSongBundle(bytes)` — the song, each plugin's manifest plus source,
   each sample's wav. Exact or refused: a missing song, a non-song `song.json`,
   a plugin folder with no manifest or no module each name the break — one bad

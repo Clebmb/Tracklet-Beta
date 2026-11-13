@@ -489,7 +489,7 @@ describe('velocity', () => {
     // The whole reason velocity could be added to a hundred songs at once: a
     // note nobody accented is exactly as loud as it was before velocity existed.
     expect(DEFAULT_VELOCITY).toBe(MAX_VELOCITY);
-    expect(emptyCell()).toEqual({ note: null, extra: [], drum: null, velocity: DEFAULT_VELOCITY, slide: false, stutter: DEFAULT_STUTTER, grace: 0, bend: 0 });
+    expect(emptyCell()).toEqual({ note: null, extra: [], drum: null, gesture: null, velocity: DEFAULT_VELOCITY, slide: false, stutter: DEFAULT_STUTTER, grace: 0, bend: 0 });
     const pattern = emptyPattern('P', 2, 1);
     writeNote(pattern, 0, 0, 60);
     expect(pattern.steps[0][0].velocity).toBe(DEFAULT_VELOCITY);
@@ -525,17 +525,17 @@ describe('velocity', () => {
 
   it('copies with the pattern, so a copied bar keeps its accents', () => {
     const song = createSong();
-    song.patterns[0].steps[0][0] = { note: 60, extra: [], drum: null, velocity: 40, slide: true, stutter: 3, grace: 0, bend: 0 };
+    song.patterns[0].steps[0][0] = { note: 60, extra: [], drum: null, gesture: null, velocity: 40, slide: true, stutter: 3, grace: 0, bend: 0 };
     copyPattern(song, 1, 2);
-    expect(song.patterns[1].steps[0][0]).toEqual({ note: 60, extra: [], drum: null, velocity: 40, slide: true, stutter: 3, grace: 0, bend: 0 });
+    expect(song.patterns[1].steps[0][0]).toEqual({ note: 60, extra: [], drum: null, gesture: null, velocity: 40, slide: true, stutter: 3, grace: 0, bend: 0 });
   });
 
   it('keeps the velocity on the note and clamps it on the way to the sequencer', () => {
     const pattern = emptyPattern('P', 2, 2);
-    pattern.steps[0][0] = { note: 60, extra: [], drum: null, velocity: 30, slide: false, stutter: 1, grace: 0, bend: 0 };
+    pattern.steps[0][0] = { note: 60, extra: [], drum: null, gesture: null, velocity: 30, slide: false, stutter: 1, grace: 0, bend: 0 };
     // A wild number from a hand-edited file never reaches the audio graph: the
     // row reads back clamped, so the range holds at the door.
-    pattern.steps[0][1] = { note: 64, extra: [], drum: null, velocity: 5000, slide: false, stutter: 9, grace: 0, bend: 0 };
+    pattern.steps[0][1] = { note: 64, extra: [], drum: null, gesture: null, velocity: 5000, slide: false, stutter: 9, grace: 0, bend: 0 };
     expect(rowNotes(pattern, 0)).toEqual([
       { track: 0, midi: 60, velocity: 30, articulation: { slide: false, stutter: 1, grace: 0, bend: 0 }, drum: null },
       { track: 1, midi: 64, velocity: 100, articulation: { slide: false, stutter: 8, grace: 0, bend: 0 }, drum: null },

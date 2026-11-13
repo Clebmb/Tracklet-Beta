@@ -153,7 +153,7 @@ describe('the language and the manifest', () => {
 
   it('applies every published transformation, the roll among them', () => {
     for (const one of scriptCapabilities().vocabulary.rowTransforms) {
-      const count = one.id === 'repeat' ? ' 2' : '';
+      const count = one.id === 'repeat' || one.id === 'transpose' ? ' 2' : '';
       expect(applied(`tracks 1\nC-4\nrows 0 to 0 ${one.words}${count}`)).toBeTruthy();
     }
   });

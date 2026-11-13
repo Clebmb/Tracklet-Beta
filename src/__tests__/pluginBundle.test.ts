@@ -256,6 +256,28 @@ describe('a song bundle carries the song plus what it names', () => {
     if (!parsed.ok) return;
     expect(parsed.bundle.plugins).toEqual([]);
     expect(parsed.bundle.samples).toEqual([]);
+    expect(parsed.bundle.kits).toEqual([]);
+  });
+
+  it('carries the KIT the song names, so the drums arrive', () => {
+    // Without this a bundle arrived with the right kit NAME and the wrong drums:
+    // the fallback preset, and nothing said so.
+    const kit = { name: 'MYHOUSE', voices: { kick: { wave: 'sine' } } };
+    const bytes = buildSongBundle({ songJson, plugins: [], samples: [], kits: [{ name: 'MYHOUSE', json: kit }] });
+    const parsed = parseSongBundle(bytes);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.bundle.kits).toEqual([{ name: 'MYHOUSE', json: kit }]);
+  });
+
+  it('refuses a kit inside a bundle that is not JSON, naming it', () => {
+    const broken = zipStore([
+      { name: 'song.json', bytes: new TextEncoder().encode(songJson) },
+      { name: 'kits/MYHOUSE.json', bytes: new TextEncoder().encode('{nope') },
+    ]);
+    const parsed = parseSongBundle(broken);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.error).toContain('MYHOUSE');
   });
 
   it('refuses what is not a bundle, naming the break', () => {

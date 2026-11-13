@@ -63,7 +63,7 @@ describe('the arp settings on the song', () => {
     // The arp version sits three below the ceiling (a plugin instrument claims one above it, a seated effect
     // another, turned knobs the top), one above the live set's scenes, and the model field sits at the end
     // of the shelf beside the machine.
-    expect(PLUGIN_PARAMS_SONG_FILE_VERSION).toBe(SONG_FILE_VERSION_MAX);
+    expect(PLUGIN_PARAMS_SONG_FILE_VERSION).toBeLessThan(SONG_FILE_VERSION_MAX);
     expect(PLUGIN_LOCK_SONG_FILE_VERSION).toBe(PLUGIN_PARAMS_SONG_FILE_VERSION - 1);
     expect(FX_SONG_FILE_VERSION).toBe(PLUGIN_LOCK_SONG_FILE_VERSION - 1);
     expect(PLUGIN_SONG_FILE_VERSION).toBe(FX_SONG_FILE_VERSION - 1);

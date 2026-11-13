@@ -41,7 +41,7 @@
  * Phaser-free and audio-free like the rest of `model/`.
  */
 
-import { DEFAULT_LEVEL, MAX_TRACKS, clampLevel } from './song';
+import { DEFAULT_LEVEL, clampLevel } from './song';
 
 /**
  * How many buses a song may define.
@@ -52,7 +52,15 @@ import { DEFAULT_LEVEL, MAX_TRACKS, clampLevel } from './song';
  * Eight faders and four group faders is a mixing desk; eight of each is a
  * spreadsheet, which is the thing buses exist to prevent.
  */
-export const MAX_BUSES = MAX_TRACKS / 2;
+/**
+ * How many groups the mixer draws: four.
+ *
+ * It used to be `MAX_TRACKS / 2`, which was four while a song had eight
+ * channels — a coincidence that would have doubled the mixer's rows the moment
+ * the song grew to sixteen, for a layout reason rather than a musical one. A
+ * group is a group; the MIXER page has room for four of them.
+ */
+export const MAX_BUSES = 4;
 
 /** How long a bus name may be, in characters: the same budget a section gets. */
 export const MAX_BUS_NAME = 12;

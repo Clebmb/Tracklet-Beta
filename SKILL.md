@@ -57,6 +57,7 @@ This is the order that works. Fill it in rather than inventing a layout.
 ```text
 new                                        # always first: this REPLACES the song
 song "<TITLE>"                             # at most 32 characters
+credits "<TEXT>"                           # who made it, what it borrows; 200 chars, `credits clear`
 key <A minor>                              # major | minor | harmonic minor | dorian | pentatonic
 tuning <equal>                             # omit unless the music wants early-music intonation
 tempo <40-300>
@@ -114,6 +115,13 @@ over.
 | `reverb` | deep | How much of the hall comes back (0–100). The room the song plays in. |
 | `echo` | deep | How much of a single beat-synced repeat comes back (0–100). |
 | `master` | deep | The ten effects on the whole mix: `master drive 20 tilt 15`. |
+| `table` | deep | A **wavetable of the channel's own**: `table 1 ODD 1 0 0.5` gives a `wave table` voice a spectrum you wrote — harmonic amplitudes from the fundamental upward, -1..1 each, up to 16 — instead of the bank entry `duty` picks. A spectrum of all zeroes is refused (silence with a name). `table 1 clear` wears the bank again. |
+| `slice` | deep | One piece of a channel's recording: `slice 1 0 0.42` then `slice 1 0.42 0.9`, in the recording's own seconds. On a sliced channel the note number picks the piece — C-4 is the first, C#-4 the second — so a chopped break plays like an instrument; `slice 1 clear` plays it whole again, and a note past the last piece plays the whole recording. |
+| `fade` | deep | How ONE note leaves: `fade 1 1 2 40` has pattern 1's row 1 on channel 2 fall away through the last four tenths of its own length (0 for no fade, a span works as on `push`). A fade rather than a shorter `hold` — shortening the hold CUTS a note off, this lets it fall — and it is a stage on the whole voice, so it works on samples too and a chord fades together. A song holding one writes file version 55. |
+| `pan` | deep | Which way ONE hit leans: `pan 1 1 2 -30` is pattern 1's row 1 on channel 2, left of centre — -100 hard left to 100 hard right, 0 the centre, RELATIVE to the channel so the mixer still owns the strip. A hat and a snare share a channel and belong in different places, which channel pan cannot say; a span works as on `push`, and a hit that never pans builds no extra node. A song holding one writes file version 54. |
+| `seek` | deep | One cell begun PARTWAY into its sample: `seek 1 1 2 25` is pattern 1's row 1 on channel 2, a quarter of the way in, skipping the attack (0..95 percent). Measured inside the window the note already plays — a slice's piece, a take's trim — so a chopped break seeks within its piece, and `seek … 0` begins at the start. It is how one long recording becomes several sounds without being cut. A song holding one writes file version 53. |
+| `push` | deep | One cell that lands BEHIND its step: `push 1 1 2 2` is pattern 1's row 1 on channel 2, two ticks late, where a tick is a sixth of a step (0..3; `push 1 1 2 0` puts it back on the step). Rows count from 1, the push lives on the cell so a re-pitch keeps it, and it is measured in ticks of a step so it leans the same at any tempo — which is how a snare sits behind the beat. A song holding one writes file version 52. Shorthand: `C-4:late2` on the note itself, and several clauses chain: `hat:pan-30:seek25`. |
+| `zone` | deep | One boundary of a channel's KEYMAP: `zone 1 C-4 PIANO_HI` makes everything from C-4 upward play `PIANO_HI` instead of the channel's own recording. One line per boundary, `zone 1 clear` empties it, and the lowest zone owns everything below it — so a piano can be sampled in octaves instead of stretched from middle C. |
 | `automate` | deep | One value moving over bars — the riser, the fade, the filter opening. |
 | `section` | core | Name a group of bars: `section VERSE 1 1 2 1`. A section may also name the drum machine bar it plays: `section CHORUS 3 4 machine 2` (the beat follows the form). |
 | `arrange` | core | Build the order out of section names — the form in one line. |
@@ -126,6 +134,7 @@ over.
 | `chords` | deep | What one key writes from now on: `off`, `triad`, `7th`. |
 | `hear` | deep | Whether notes are auditioned as the cursor reaches them. |
 | `export` | deep | What an audio export covers and how loud: `export bars 8 to 15 loud -14`. |
+| `pack` | deep | Write the song as ONE file that carries its samples and pinned plugins, so it plays elsewhere: `pack save`. |
 | `page` | deep | Which full screen is showing: `page arranger`, `page mixer`, `page live`, `page recorder`, `page arp` — or `page plugin:com.example.meter-panel` for a plugin panel (spelling-checked, resolved when it opens; an id this machine lacks leaves the tracker up with a notice). A session setting, so one script can drive every tab. |
 | `live` | deep | How a launch lands: `live quantize 4` waits for the next four bars before a queued scene takes over; `0` (or `off`) is immediate. A session setting, so no file carries it. |
 | `tracks` | core | How many channels the song has (1–8). Before any `track` line. |
@@ -141,7 +150,7 @@ over.
 | `order` | core | Which patterns play, in what order. Without one, only pattern 1 plays, forever. |
 | `clear` | core | Empty a pattern and start it again. |
 | `copy` | core | Copy one pattern into another, to vary it. |
-| `rows` | deep | A range of steps: move its pitches by octaves, play it again, roll it, or read it backwards (`rows 0 to 3 reverse`). |
+| `rows` | deep | A range of steps: move its pitches by octaves or semitones, fill it, slide between its ends, play it again, roll it, or read it backwards (`rows 0 to 3 reverse`). |
 | `note` | core | Write one note at an exact row and channel: `note 0 2 C-4`. |
 | `chord` | core | Write a whole chord from a row, across channels or into one cell. |
 | `arp` | core | The ARP page's dials — `arp direction updown`, `arp octaves 2 rate 2 gate 60`, `arp mode source` — stored in the song, plus `arp write 0 1 Am` to commit the run they describe, `arp off` to clear them, and `arp hear on` to audition the run as the dials move (a session setting, like `page`). |
@@ -307,10 +316,13 @@ plain channel value the synth reads per note rather than a node in the chain.
 
 **Layer fields** (3) — `octave` (−4…4), `detune` (−100…100 cents), `gain` (0–100).
 
-**Row transforms** — `octave up`, `octave down`, `repeat N`, `roll [N]` (retrigger
-every hit in the range inside its step: `rows 12 to 15 roll`, four hits each
-unless you say otherwise), and `reverse` (`rows 0 to 3 reverse`: read the range
-backwards, the last step first — no number, because there is only one way).
+**Row transforms** — `octave up`, `octave down`, `transpose N` (semitones, signed,
+−48…48: `rows 0 to 7 transpose -5` is down a fourth), `fill` (keep the note at the
+top of the range playing down its empty steps), `interpolate` (write the empty
+steps between the range's first and last note, evenly), `repeat N`, `roll [N]`
+(retrigger every hit in the range inside its step: `rows 12 to 15 roll`, four hits
+each unless you say otherwise), and `reverse` (`rows 0 to 3 reverse`: read the
+range backwards, the last step first — no number, because there is only one way).
 
 **Articulation suffixes on a note** — `>` slides into the pitch, `*N` hits it N
 times inside one step (2–8), `!` flams one grace hit into the beat and `!!` drags
@@ -350,19 +362,21 @@ TRACK follow` and `note ROW TRACK follow`. `progression none` clears the loop.
 | flam (`!`) / drag (`!!`) | 1 / 2 grace hits | — |
 | scoop (`^`) / fall (`v`) | ±1–12 semitones | 2 |
 | `rows … octave` | 1–8 octaves | — |
+| `rows … transpose` | −48…48 semitones, not 0 | — |
+| `rows … fill` / `interpolate` | — (no number) | — |
 | `rows … repeat` | 2+ (must fit the pattern) | — |
 | `rows … reverse` | — (no number) | — |
-| automation lanes | 32 | — |
-| sections | 24, name ≤12 chars | — |
+| automation lanes | 64 | — |
+| sections | 48, name ≤12 chars | — |
 | `arrange … repeat` | 2–64 | — |
 | buses | 4, name ≤12 chars | — |
 | progression | 16 chords, `hold` 1–64 | hold 4 |
 | samples | 8, name ≤16 chars, ≤30 s each | — |
-| `export bars A to B` | 1–64 | the whole song |
+| `export bars A to B` | 1–256 | the whole song |
 | `reverb`, `echo` | 0–100 | 0 |
 | `octave` | 0–7 | 4 |
-| patterns | 64 | — |
-| `order` length | 64 | — |
+| patterns | 128 | — |
+| `order` length | 256 | — |
 | tempo changes | 32 | — |
 | title / channel name / saved sound name | 32 / 16 / 12 chars | — |
 | layers per channel | 4 (the voice is layer 1) | 1 |
@@ -417,6 +431,7 @@ count from 1 — that asymmetry is the mistake every new author makes once.
 | "a house track", "some lofi", "a ballad" | `start house` / `start lofi` / `start ballad` — one line, then EDIT something in it. |
 | "8-bit", "NES", "Game Boy", "Mega Drive" | `tracks N` then `chip nes` / `chip gb` / `chip genesis`. |
 | "a beat", "four on the floor" | one drum channel with drum words: `kick . snare . hat .` |
+| "stop the pad before its hold ends" | `off` in that channel's column on the step it should end (`cut` to choke it) — a stop is a cell, so it needs no effect column and no shorter `hold` |
 | "a beat on a drum machine", "a house beat", "a pumping kick" | `machine steps 16 beat 4 duck 30` then `pad 1 KICK pattern "9...9...9...9..."`, `pad 2 SNARE pattern "....9.......9..."`. |
 | "a trap hat", "a fast hi-hat" | `pad 3 HAT pattern "9.9.9.9.9.9.9.9."` on a 16-step machine — or `machine steps 32` for a run of sixteenths over two beats. |
 | "a chord progression", "Am F C G" | `progression Am F C G hold 8` then `chord 0 1 follow` on a `poly 4` channel. |

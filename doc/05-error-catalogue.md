@@ -28,9 +28,22 @@ C-4 D-4 E-4 F-4 G-4  # ...no: this one is the "too wide" error instead
 
 **Fix:** use one of the command words listed above (either the fifty-one this build
 knows, or the shorter list the message printed), or write the line as a real grid
-row (every token a pitch, a drum word (`kick`, `snare`, `hat`, `wind`) or an empty
-token). Notes are `A`–`G` only — there is no
+row (every token a pitch, a drum word (`kick`, `snare`, `hat`, `wind`), a stop
+(`off`, `cut`) or an empty token). Notes are `A`–`G` only — there is no
 `H`, and sharps are written `#`, flats `b`.
+
+### `column <n>: "off~40" is a stop, so it takes no force and no gesture. Write off on its own.`
+
+A stop is a command rather than a note, so there is nothing for a `~force` or a
+`>` to attach to. The message names the word you meant, because the fix is always
+the same: write the stop by itself.
+
+```
+off~40      # -> column 1: "off~40" is a stop, so it takes no force… Write off on its own.
+```
+
+**Fix:** `off` or `cut`, alone in its column. If the note before it should be
+quieter, the force belongs on the note (`C-4~40`), not on the step that ends it.
 
 ### `"<x>" is not a drum. The kit is kick, snare, hat, wind — e.g. drum <r> <t> kick.`
 
@@ -315,6 +328,29 @@ A bare `key` line.
 **Fix:** put a note and a scale after it. A bare note alone is fine and means
 major: `key C`.
 
+### `credits needs the line itself, e.g. credits "MADE BY ... — break from a 1972 record", or credits clear to take it off.`
+
+A bare `credits` with nothing after it. It is free text, so there is nothing to
+guess at: say who made the song, or say `clear` to take the credit off a song
+that had one.
+
+```
+credits                      # says nothing
+credits clear                # takes it off
+```
+
+### `a credits line may be at most 200 characters; this one is <n>. A credit is a name and a source, not an essay — trim it to the part that matters.`
+
+A credits line longer than the field holds. The ceiling is 200: a name, a source
+and a thanks, rather than a sleeve essay. Nothing is truncated silently, because
+a truncated credit is somebody's name with its end cut off.
+
+### `"credits" must be text, e.g. "MADE BY ... — break from a 1972 record".`
+
+A `.json` whose `credits` is a number, an object or a list. Refused by name
+rather than dropped: a credit that quietly disappears is somebody's name not
+arriving.
+
 ### `a song title may be at most 32 characters; "<x>" is <n>. Shorten it, or use fewer words.`
 
 A `song` title longer than the header bar can show. The title shares the top bar
@@ -371,7 +407,7 @@ tempo 90 until 9
 **Fix:** `at` for a change that happens ON a bar, `by` for a slide that ARRIVES
 there: `tempo 140 at 5`, `tempo 90 by 9`.
 
-### `a tempo change lands on a bar, 1..64; got "<x>". The bar is a slot of the order, the same number "order" uses.`
+### `a tempo change lands on a bar, 1..256; got "<x>". The bar is a slot of the order, the same number "order" uses.`
 
 The bar of a tempo change is a slot of the SONG's order — the numbers
 `order 1 2 1 3` lists — not a pattern number, and not a row.
@@ -379,7 +415,7 @@ The bar of a tempo change is a slot of the SONG's order — the numbers
 ```
 tempo 140 at 0        # the first bar is 1
 tempo 140 at 2.5
-tempo 140 at 65       # an order holds at most 64 bars
+tempo 140 at 65       # an order holds at most 256 bars
 ```
 
 **Fix:** name a slot from `1` to the length of the order.
@@ -519,6 +555,52 @@ octave 4.5
 **Fix:** `octave 0` … `octave 7`. Note that `octave` moves the app's own `OCT`
 control as well as the octave bare letters are written in, so a script can hand
 over a song already set up for the register it was written in.
+
+### `pack needs save, e.g. pack save — one file holding the song, its samples and its plugins.`
+
+`pack` with nothing after it, or with a word that is not `save`.
+
+```
+pack
+pack load midnight.tracklet-bundle.zip
+```
+
+**Fix:** `pack save`. It is the only form: writing a pack is a side effect a script
+can ask for, and loading one needs a file this app would have to be handed, which
+is what OPEN FILE is for. `pack save` writes the song's JSON, every sample it
+names and every plugin it pinned, as one downloadable zip.
+
+### `advance needs one whole number, e.g. advance 2 — how many rows the cursor steps down after a note is written.`
+
+`advance` with nothing after it, or with a second value.
+
+```
+advance
+advance 2 4
+```
+
+**Fix:** one whole number, `0` to `8`. It is the EDIT STEP: write a note, and the
+cursor moves that many rows down, so `advance 2` writes every other step (a
+four-on-the-floor, a 32nd roll) without touching the arrow keys. `advance 0`
+stays where it is, which is how a chord or a drum fill is stacked into ONE step.
+It is a session setting like `octave` — it says how you are TYPING, not what the
+song is — so no file carries it and it costs no undo step. The grid's own keys are
+`,` and `.`.
+
+### `advance must be a whole number 0..8, and 0 means stay on the row; got "<x>".`
+
+A step outside what the editor can take.
+
+```
+advance 9
+advance 1.5
+advance two
+```
+
+**Fix:** `advance 0` … `advance 8`. Anything further is not a step a person types,
+and a fraction of a row is not a place the cursor can be. The refusal names `0`
+because `advance 0` is the one value that looks like an error and is not: it is
+the setting that keeps the cursor on the row.
 
 ### `solo needs one or more channel numbers 1..<t> (or "solo off" to hear everything again), e.g. solo 2.`
 
@@ -770,7 +852,7 @@ scene A 1 x 2
 ```
 
 **Fix:** quote the name if it has a space (`scene "MY BREAK" 1 2`) and give each
-channel a pattern number `1..64` or `-` for silence.
+channel a pattern number `1..128` or `-` for silence.
 
 ### `a song may hold at most <max> scenes, and this one already has <max>. Use one of the names it has, or replace one.`
 
@@ -867,7 +949,22 @@ argument prints the same list.
 
 **Fix:** `tracks 4`.
 
-### `tracks must be a whole number 1..8; got "<x>".`
+### `steps needs one number, e.g. steps 32 — or steps 32 pattern 3 for one pattern's own length.`
+
+A `steps` line with words after the number that are not the per-pattern clause. The
+statement takes the song's length, or one pattern's.
+
+```
+steps 32                 # every pattern
+steps 32 pattern 3       # pattern 3 alone
+steps 32 in 3            # not the spelling — there is no `in`
+```
+
+### `steps ... pattern needs a pattern number 1..128; got "<x>".`
+
+The clause is there but the pattern it names is not a number this build has.
+
+### `tracks must be a whole number 1..16; got "<x>".`
 
 The channel count must be a whole number between 1 and 8.
 
@@ -1167,21 +1264,51 @@ automate 2 bright low high bars 1 to 4
 **Fix:** `automate 2 bright 15 95 bars 1 to 4`. A value that is a lane's `from` and
 its `to` is a set rather than a walk, and is legal.
 
-### `a lane needs the bars it spans, written "bars 8 to 15" (or "bars 8" for one bar), 1..<N> — the same numbers "order" uses. Got "<x>".`
+### `a lane needs the range it spans, written "bars 8 to 15" (or "bars 8" for one bar) or "note 0 to 6" for steps since each hit. Got "<x>".`
 
-An `automate` line whose bar range is missing or misspelled — a lane with no bars
-is a change with no WHEN, which is the one thing it cannot be. The bars are slots
-of the `order`, 1-based and at most 64, exactly the numbers `order` and
-`tempo … at BAR` use.
+An `automate` line whose range is missing or misspelled — a lane with no range is
+a change with no WHEN, which is the one thing it cannot be. There are two clocks
+and they are one word apart: `bars` is the song's (slots of the `order`, 1-based,
+at most 256, the numbers `order` and `tempo … at BAR` use) and `note` is the
+channel's (steps since each hit, `0` being the hit).
 
 ```
 automate 2 bright 15 95              # where?
 automate 2 bright 15 95 bars         # where?
 automate 2 bright 15 95 bar 8 to 15  # the word is `bars`
-automate 2 bright 15 95 bars 8       # one bar: 8 to 8
+automate 2 level 90 20 notes 0 to 6  # and this one is `note`
 ```
 
-**Fix:** `automate 2 bright 15 95 bars 8 to 15`, or `bars 8` for a single bar.
+**Fix:** `automate 2 bright 15 95 bars 8 to 15`, `bars 8` for a single bar, or
+`note 0 to 6` to move a value across each note on the channel.
+
+### `"<x>" cannot ride the note clock: level and bright can — a level is rewritten on every step, and a brightness is scheduled across the note's own filter — and the rest are read once when the note begins. Write it on bars, or automate level or bright per note.`
+
+A note-clock lane on a target the two consumers cannot sweep inside a note.
+
+```
+automate 2 gate 100 40 note 0 to 4
+automate 2 sweep 90 20 note 0 to 6
+```
+
+**Fix:** `automate 2 level 90 20 note 0 to 6` (a level is re-written on every step)
+or `automate 2 bright 90 20 note 0 to 6` (a brightness is scheduled across the
+note's own filter, point by point). The rest — `gate`, `drift`, `sweep`, the
+wave-shaped knobs, a plugin knob — are read ONCE, when the note is built, so a
+per-note walk of them would need a re-voice mid-note; write those on `bars` and
+they move exactly as they always did.
+
+### `steps since a hit run 0..64; got "<x>" to "<y>". A note is at most a few bars long.`
+
+A note-clock range outside what the clock can address.
+
+```
+automate 2 level 90 20 note 0 to 200
+```
+
+**Fix:** keep both numbers in `0`–`64`, and make the second one the later of the
+two. `0` is the hit itself, so `note 0 to 6` is a walk across six steps of every
+note on the channel.
 
 ### `bars are 1..<N>, the same numbers the order uses; got "<x>" to "<y>".`
 
@@ -1194,7 +1321,7 @@ automate 2 bright 15 95 bars 0 to 4
 automate 2 bright 15 95 bars 1 to 99
 ```
 
-**Fix:** keep both numbers inside `1`–`64`, and inside the bars the `order`
+**Fix:** keep both numbers inside `1`–`256`, and inside the bars the `order`
 actually plays.
 
 ### `a lane runs from an earlier bar to a later one, e.g. "bars 8 to 15"; got "bars <a> to <b>". Swap them, or write two lanes if the value should rise and then fall.`
@@ -1290,8 +1417,8 @@ machine's own `order` decide.
 
 ### `a section holds at most <N> bars, the most a song plays; this one has <N>. Shorten it, or make two sections.`
 
-More than 64 bars listed on one `section` line. The ceiling is the song's own: an
-arrangement may play at most 64 bars, so a single section longer than that could
+More than 256 bars listed on one `section` line. The ceiling is the song's own: an
+arrangement may play at most 256 bars, so a single section longer than that could
 never be used whole.
 
 **Fix:** two sections, or a shorter one.
@@ -1381,7 +1508,7 @@ arrange VERSE repeat 1
 
 **Fix:** `arrange VERSE`, or `arrange VERSE repeat 2` for twice.
 
-### `"repeat" needs how many times the section plays in all, 2..64, e.g. "arrange CHORUS repeat 4"; got "<x>".`
+### `"repeat" needs how many times the section plays in all, 2..256, e.g. "arrange CHORUS repeat 4"; got "<x>".`
 
 The count after `repeat` is missing, not a number, or outside the range — a
 section may play at most as many times as a song has bars.
@@ -1402,7 +1529,7 @@ because the sections each look reasonable individually.
 
 ```
 section LONG 1 1 2 1 3 4        # 6 bars
-arrange LONG LONG LONG LONG ... # 64 bars is the most the order holds
+arrange LONG LONG LONG LONG ... # 256 bars is the most the order holds
 ```
 
 **Fix:** fewer sections in the arrangement, or shorter sections.
@@ -2244,10 +2371,10 @@ strum needs a span in steps 0..4, e.g. "strum 1" (0 plays the chord as a block).
 The words that have a section of their own above (`wave`, `hold`, `level`, the
 nine knobs, `voice`, the mute flag) print the same shape with their own advice.
 
-### `pattern must be a whole number 1..64; got "<x>".`
+### `pattern must be a whole number 1..128; got "<x>".`
 
 `pattern` with a missing, non-integer, or out-of-range pattern number. Patterns
-are numbered **from 1** and there are at most 64.
+are numbered **from 1** and there are at most 128.
 
 ```
 pattern 0
@@ -2257,7 +2384,7 @@ pattern 999
 
 **Fix:** `pattern 1` … `pattern 64`.
 
-### `order takes pattern numbers 1..64; got "<x>".`
+### `order takes pattern numbers 1..128; got "<x>".`
 
 An `order` line names bars by pattern number, and one of the numbers is not one.
 
@@ -2275,7 +2402,7 @@ it is refused rather than read as "play nothing".
 
 **Fix:** `order 1`, or a longer list.
 
-### `a song order may have at most 64 slots; this one has <n>. Shorten it.`
+### `a song order may have at most 256 slots; this one has <n>. Shorten it.`
 
 An `order` line longer than a song may be. The ceiling is here because the order
 is the form of the whole piece, and a thousand bars is a file rather than a song.
@@ -2295,7 +2422,7 @@ clear 2 3
 
 **Fix:** `clear` (the current pattern) or `clear 2` (one specific one).
 
-### `clear needs a pattern number 1..64; got "<x>".`
+### `clear needs a pattern number 1..128; got "<x>".`
 
 `clear X` where `X` is not a valid pattern number.
 
@@ -2311,9 +2438,9 @@ copy 1 99
 copy a b
 ```
 
-**Fix:** `copy <from> <to>`, both 1–64.
+**Fix:** `copy <from> <to>`, both 1–128.
 
-### `rows needs a range of steps and what to do with them — e.g. "rows 0 to 3 octave up", "rows 0 to 3 octave down 2" or "rows 0 to 3 repeat 4". A range can do: octave up, octave down, repeat, roll.`
+### `rows needs a range of steps and what to do with them — e.g. "rows 0 to 3 octave up", "rows 0 to 3 octave down 2" or "rows 0 to 3 repeat 4". A range can do: octave up, octave down, transpose, fill, interpolate, repeat, roll, reverse.`
 
 `rows` with too few values to say what to do. The statement is a RANGE and a
 transformation: which steps, then what happens to them.
@@ -2324,9 +2451,9 @@ rows 0 to 3
 rows 0 to 3 octave
 ```
 
-**Fix:** `rows <from> to <to> octave up|down [N]`, `rows <from> to <to> repeat N`,
-or `rows <from> to <to> roll [N]`. It acts on the pattern `pattern` selected, the
-way `note` and `erase` do.
+**Fix:** `rows <from> to <to>` and then `octave up|down [N]`, `transpose N`,
+`fill`, `interpolate`, `repeat N`, `roll [N]` or `reverse`. It acts on the pattern
+`pattern` selected, the way `note` and `erase` do.
 
 ### `rows takes a range written "A to B" — the steps to act on, e.g. "rows 0 to 3 octave up". Rows count from 0, the same numbers the grid shows.`
 
@@ -2413,18 +2540,72 @@ rows 0 to 3 repeat twice
 **Fix:** `repeat 2` or more. Remember the count is how many times the figure
 plays **in all**, not how many extra copies it gets.
 
-### `"<x>" is not something a range of steps can do. A range can do: octave up, octave down, repeat, roll.`
+### `"<x>" is not something a range of steps can do. A range can do: octave up, octave down, transpose, fill, interpolate, repeat, roll, reverse.`
 
 An unknown transformation after the range.
 
 ```
 rows 0 to 3 sideways
-rows 0 to 3 transpose 2
 ```
 
-**Fix:** one of `octave up`, `octave down`, `repeat N` or `roll [N]`. `fill`,
-`harmonize` and `variation` are not words yet — a range of steps is the grammar
-they will be written with, not one of them.
+**Fix:** one of `octave up`, `octave down`, `transpose N`, `fill`, `interpolate`,
+`repeat N`, `roll [N]` or `reverse`. `harmonize` and `variation` are not words yet
+— a range of steps is the grammar they will be written with, not one of them.
+
+### `"transpose" needs how many semitones to move the range, and the sign says which way — e.g. "rows 0 to 3 transpose 2" up a whole tone, or "rows 0 to 3 transpose -5" down a fourth; got "transpose".`
+
+`transpose` with no number. The sign carries the direction, so there is no word
+for up or down and the number is not optional.
+
+```
+rows 0 to 3 transpose
+```
+
+**Fix:** a whole number of semitones, positive up and negative down:
+`rows 0 to 3 transpose 2` is up a whole tone, `rows 0 to 3 transpose -5` down a
+fourth. Twelve of these is one octave, so `transpose 12` and `octave up` are the
+same move — the octave words exist because they are what a person says.
+
+### `"transpose" takes a whole number of semitones -48..48, and not 0 — a range moved by nothing is the range as it is; got "0".`
+
+A shift outside what a range may move, or one that moves nothing.
+
+```
+rows 0 to 3 transpose 0     # the range as it is
+rows 0 to 3 transpose 60    # five octaves, past the ceiling
+```
+
+**Fix:** a whole number from `-48` to `48`, and not `0`. `transpose 0` is refused
+for the same reason `repeat 1` and `*1` are: a number that means nothing should
+not look like one. A note that would leave `C-0..B-8` is clamped rather than
+refused, so a shift that is too large for the notes it meets is still a legal
+line.
+
+### `"fill" keeps the note at the top of the range playing down its empty steps and takes nothing else — e.g. "rows 0 to 15 fill"; got "fill 3".`
+
+A `fill` with a value after it. It has nothing to count: the range says how far.
+
+```
+rows 0 to 15 fill 3
+```
+
+**Fix:** `rows <from> to <to> fill`. The note that carries in is the one written on
+the step just BEFORE the range (so `rows 4 to 15 fill` extends step 3), or the
+first note inside it; a step that already sounds is left alone, and a stop ends
+the run it sits in.
+
+### `"interpolate" writes the empty steps between the range’s first and last note and takes nothing else — e.g. "rows 0 to 7 interpolate"; got "interpolate now".`
+
+An `interpolate` with a value after it.
+
+```
+rows 0 to 7 interpolate now
+```
+
+**Fix:** `rows <from> to <to> interpolate`. It writes single notes between each
+pair of anchors — the steps in the range that already hold a note — evenly, so
+`C-4` on row 0 and `G-4` on row 4 becomes 0, 2, 3, 5, 7 semitones. A range with
+fewer than two notes has no line to draw and writes nothing.
 
 ### `a range of steps runs from an earlier row to a later one, e.g. "rows 0 to 3"; got "rows 4 to 1". Swap the two ends, or write two statements if the rows are not one run.`
 
@@ -3253,6 +3434,170 @@ are in the song. A part saved for later, or a chorus written twice by mistake.
    script that writes a 32-step melody needs `steps 32` above it, and the same
    number is the ceiling for `note` / `erase` rows.
 
+### `table needs a channel, a name and at least one harmonic, e.g. "table 1 ODD 1 0 0.5", or "table 1 clear" for the chip bank.`
+
+A `table` line with nothing after it.
+
+```
+table
+```
+
+**Fix:** name the channel, the table and the spectrum — or `table 1 clear`.
+
+### `table takes a channel NUMBER first, 1..<N>, e.g. "table 1 ODD 1 0 0.5"; got "<x>". Use "tracks N" first to add channels.`
+
+A channel that does not exist yet.
+
+```
+tracks 2
+table 3 ODD 1 0 0.5
+```
+
+**Fix:** `tracks 3` first, or name a channel you have.
+
+### `table needs a NAME and the harmonics after it, e.g. "table 1 ODD 1 0 0.5" — one number per harmonic, starting at the fundamental.`
+
+The name with no spectrum.
+
+```
+table 1 ODD
+```
+
+**Fix:** `table 1 ODD 1 0 0.5`.
+
+### `table needs a one-word name of up to <N> characters: <why>. e.g. "table 1 ODD 1 0 0.5".`
+
+A name a script cannot read back.
+
+```
+table 1 MY TABLE 1 0.5
+```
+
+**Fix:** `table 1 MYTABLE 1 0.5` — one word, letters, digits, `_` and `-`.
+
+### `table lists harmonics as numbers from -1 to 1, e.g. "table 1 ODD 1 0 0.5"; got "<x>".`
+
+A harmonic that is not a number.
+
+```
+table 1 ODD 1 loud 0.5
+```
+
+**Fix:** `table 1 ODD 1 0 0.5`.
+
+### `table takes at most <N> harmonics; it was given <n>.`
+
+A spectrum longer than a table can hold.
+
+```
+table 1 HUGE 1 0.5 0.4 0.3 0.2 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1
+```
+
+**Fix:** at most 16 — past that it is a sampler's job, not a wavetable's.
+
+### `table needs at least one non-zero harmonic — a spectrum of zeroes is silence with a name, e.g. "table 1 ODD 1 0 0.5".`
+
+Every harmonic zero.
+
+```
+table 1 SILENT 0 0 0
+```
+
+**Fix:** the fundamental is the one that must not be zero: `table 1 ODD 1 0 0.5`.
+
+### `slice needs a channel, a start and an end in seconds, e.g. "slice 1 0 0.42", or "slice 1 clear" to play the recording whole.`
+
+A `slice` line with nothing after it.
+
+```
+slice
+```
+
+**Fix:** name the channel and the two ends in seconds — or `slice 1 clear`.
+
+### `slice takes a channel NUMBER first, 1..<N>, e.g. "slice 1 0 0.42"; got "<x>". Use "tracks N" first to add channels.`
+
+A channel that does not exist yet.
+
+```
+tracks 2
+slice 3 0 0.42
+```
+
+**Fix:** `tracks 3` first, or name a channel you have.
+
+### `slice takes a channel, a start and an end in SECONDS, e.g. "slice 1 0 0.42"; got <n> value(s). Pieces are kept in time order, so they can be written in any order.`
+
+The wrong number of values.
+
+```
+slice 1 0
+```
+
+**Fix:** `slice 1 0 0.42` — a start and an end, both in seconds.
+
+### `slice needs a start and an end in seconds, 0 or more; got "<x>" and "<y>". Seconds into the recording: "slice 1 0 0.42" is the first 0.42s.`
+
+An end before the start, or something that is not a number.
+
+```
+slice 1 -1 0.4
+```
+
+**Fix:** `slice 1 0 0.4` — a piece starts at or after zero and ends after it starts.
+
+### `zone needs a channel, a note and one recording, e.g. "zone 1 C-4 PIANO_HI", or "zone 1 clear" to empty the map.`
+
+A `zone` line with nothing after it.
+
+```
+zone
+```
+
+**Fix:** name the channel, the boundary and the recording — or `zone 1 clear`.
+
+### `zone takes a channel NUMBER first, 1..<N>, e.g. "zone 1 C-4 PIANO_HI"; got "<x>". Use "tracks N" first to add channels.`
+
+A channel that does not exist yet.
+
+```
+tracks 2
+zone 3 C-4 PIANO_HI
+```
+
+**Fix:** `tracks 3` first, or name a channel you have.
+
+### `zone takes a channel, a note and ONE recording, e.g. "zone 1 C-4 PIANO_HI". A recording's name is one word — rename the file to give it one.`
+
+Too many or too few words.
+
+```
+zone 1 C-4 MY PIANO
+```
+
+**Fix:** `zone 1 C-4 MYPIANO` — a recording's name is one word, the same rule
+`sample` keeps.
+
+### `zone needs a NOTE, e.g. "zone 1 C-4 PIANO_HI"; got "<x>". A note name like C-4 or a number 0..127 both work.`
+
+A boundary that is not a pitch.
+
+```
+zone 1 middle PIANO_HI
+```
+
+**Fix:** `zone 1 C-4 PIANO_HI` (or `zone 1 60 PIANO_HI`).
+
+### `zone names a recording the way "sample" does: <why>.`
+
+A recording name the song cannot hold — a space, or nothing.
+
+```
+zone 1 C-4 Brk 02
+```
+
+**Fix:** rename the file so its name is one word, then `zone 1 C-4 BRK02`.
+
 ### `sample load needs a path, e.g. sample load "samples/break.wav".`
 
 A bare `sample load` with nothing after it. `sample` is the one word with two
@@ -3905,6 +4250,51 @@ mistakes in a script:
 | `SAVED  <channel>.patch.json` | One channel's sound was written out. The two lines under it say what is IN the patch, and that the level, the pan and the group deliberately are not. |
 | `COULD NOT READ  <file>` (a patch) | The file is not a patch, and it says why: a song file is named as a song (`its "format" is "tracklet-song"`), a file from a newer build says so, and a value the reader will not guess at gets its own sentence. A patch whose numbers are merely out of RANGE is not an error at all — it is clamped and loads. The channel is untouched either way. |
 | `LOADED  <name>  ONTO CHANNEL <n>  <CHANNEL>` | A patch's sound arrived on a channel, as ONE `Ctrl+Z`. Nothing about the mix moved. |
+
+### `push`
+
+The one statement that names a CELL, so it has one sentence per number, and each
+one says which number it means:
+
+- **Not four values:** `push takes a pattern, a row, a channel and a number of ticks, e.g. "push 1 1 2 2" lands pattern 1's row 1 on channel 2 two ticks late; got 2 values.`
+- **Pattern:** `push takes a pattern NUMBER first, e.g. "push 1 1 2 2"; got "0". Use "patterns N" first to add one, and "order" to hear it.`
+- **Row:** `push needs a ROW second — one row or a span like 1-4 — e.g. "push 1 1 2 2"; got "0". Rows count from 1, the way the grid numbers them.`
+- **Channel:** `push needs a CHANNEL 1..4 third, e.g. "push 1 1 2 2"; got "9". Use "tracks N" first to add channels.`
+- **Ticks:** `push needs TICKS 0..3 last, where a tick is a sixth of a step; got "9". 3 is the most: past that a hit is closer to the next step than its own.`
+
+### `seek`
+
+The same four numbers as `push`, about where a hit BEGINS rather than when:
+
+- **Not four values:** `seek takes a pattern, a row, a channel and a percentage, e.g. "seek 1 1 2 25" begins pattern 1's row 1 on channel 2 a quarter of the way into its sample; got 2 values.`
+- **Pattern:** `seek takes a pattern NUMBER first, e.g. "seek 1 1 2 25"; got "0". Use "patterns N" first to add one, and "order" to hear it.`
+- **Row:** `seek needs a ROW second — one row or a span like 1-4 — e.g. "seek 1 1 2 25"; got "0". Rows count from 1, the way the grid numbers them.`
+- **Channel:** `seek needs a CHANNEL 1..4 third, e.g. "seek 1 1 2 25"; got "9". Use "tracks N" first to add channels.`
+- **Percentage:** `seek needs a PERCENTAGE 0..95 last, of the way into the sample; got "99". 95 is the most: past that what is left is a click, not an attack.`
+
+### `pan`
+
+Where ONE hit sits, relative to its channel:
+
+- **Not four values:** `pan takes a pattern, a row, a channel and a place, e.g. "pan 1 1 2 -30" puts pattern 1's row 1 on channel 2 left of centre; got 2 values.`
+- **Pattern:** `pan takes a pattern NUMBER first, e.g. "pan 1 1 2 -30"; got "0". Use "patterns N" first to add one, and "order" to hear it.`
+- **Row:** `pan needs a ROW second — one row or a span like 1-4 — e.g. "pan 1 1 2 -30"; got "0". Rows count from 1, the way the grid numbers them.`
+- **Channel:** `pan needs a CHANNEL 1..4 third, e.g. "pan 1 1 2 -30"; got "9". Use "tracks N" first to add channels.`
+- **Place:** `pan needs a PLACE last, -100 (hard left) .. 100 (hard right), where 0 is the centre; got "left-ish".`
+
+### a cell's colon clauses
+
+- `column 3: "C-4:wobble2" has a clause a note cannot carry. Write :late0..3 (ticks), :seek0..95 (percent in), :pan-100..100 or :fade0..100 (percent of the note), e.g. C-4:late2 or hat:pan-30.`
+
+### `fade`
+
+How a note leaves, rather than how long it lasts:
+
+- **Not four values:** `fade takes a pattern, a row, a channel and a percentage, e.g. "fade 1 1 2 40" has pattern 1's row 1 on channel 2 fall away over its last four tenths; got 2 values.`
+- **Pattern:** `fade takes a pattern NUMBER first, e.g. "fade 1 1 2 40"; got "0". Use "patterns N" first to add one, and "order" to hear it.`
+- **Row:** `fade needs a ROW second — one row or a span like 1-4 — e.g. "fade 1 1 2 40"; got "0". Rows count from 1, the way the grid numbers them.`
+- **Channel:** `fade needs a CHANNEL 1..4 third, e.g. "fade 1 1 2 40"; got "9". Use "tracks N" first to add channels.`
+- **Percentage:** `fade needs a PERCENTAGE 0..100 last — how much of the note is the fall — e.g. "fade 1 1 2 40"; got "120".`
 
 The `APPLY` button is **disabled while anything is wrong** and enabled the moment
 the whole script parses. If `APPLY` will not light up, the verdict area below the

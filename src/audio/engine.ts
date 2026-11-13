@@ -103,7 +103,10 @@ import {
   type Patch,
   type StackedSound,
 } from '../model/instrument';
-import { automatedDrift, automatedGate, automatedLevel, automatedPluginParams, automatedVoice, type AutomationLane } from '../model/automation';
+import { automatedDrift, automatedGate, automatedLevel, automatedPluginParams, automatedVoice, noteClockCurve, type AutomationLane } from '../model/automation';
+import { zoneFor, type KeyZone } from '../model/zone';
+import { seekWindow, sliceWindowFor, type Slice } from '../model/slice';
+import { fadeStage, panStage } from './chain';
 import { busLevelFor, type Bus } from '../model/bus';
 import { articulationHits, type Articulation } from '../model/articulation';
 import { drumPitch, type DrumId } from '../model/drum';
@@ -113,12 +116,13 @@ import { DEFAULT_VOICE, type VoiceParams } from '../model/voice';
 import { buildChannelChain, buildMasterChain, type ChannelChain, type MasterChain } from './chain';
 import { machineDucks, machineGain, machineHitsInRange, machineStepSeconds, padStripOptions } from './machine';
 import type { DrumMachine, DrumPad } from '../model/machine';
-import { buildNote, makeNoiseBuffer, noteLength, ownedSampleBuffer, releaseNote, type NoteGraph, type StepNotesFn } from './synth';
+import { nextLoopStep } from '../model/bounce';
+import { buildNote, makeNoiseBuffer, noteLength, ownedSampleBuffer, releaseNote, STOP_FADE, type BrightCurve, type NoteGraph, type StepNotesFn } from './synth';
 import { pluginEventFor, renderPluginBuffer, resolveTrackPlugins } from './pluginVoice';
 import { resolveTrackFx, type ResolvedTrackFx } from './pluginFx';
 import type { InstrumentPlugin, PluginParamValues } from '../plugins/instrument';
 import type { EffectPlugin } from '../plugins/effect';
-import type { TrackFx } from '../model/song';
+import { lateSeconds, type RowStop, type StopId, type TrackFx } from '../model/song';
 import type { SoundFont } from '../model/soundfont';
 import { sampleByName, type Sample, type SampleWindow } from '../model/sample';
 import { takeSampleWindow, type Take } from '../model/take';
@@ -196,6 +200,15 @@ export class AudioEngine {
    * rather than a branch in the audio path.
    */
   private automation: AutomationLane[] = [];
+  /**
+   * The step each channel last HIT on, for a lane on the note clock.
+   *
+   * One number per channel rather than per sounding note, because the level a lane
+   * moves is the CHANNEL's: two notes overlapping on one channel share a gain, and
+   * the second one restarts the walk — which is what "per note" means when the
+   * notes are on one channel and the lane moves the channel.
+   */
+  private hitStep: number[] = [];
   /** How many steps one bar of the arrangement holds. See `setAutomation`. */
   private rowsPerBar = DEFAULT_ROWS;
   /**
@@ -462,6 +475,20 @@ export class AudioEngine {
    */
   private samples: (Sample | null)[] = [];
   /**
+   * The bank the channel recordings were resolved from, kept for KEYZONES.
+   *
+   * A keymap names recordings the channel's own `sample` does not, so a zone can
+   * only be resolved against the bank itself — and it is resolved per NOTE, at
+   * build time, because which zone owns a note depends on the note.
+   */
+  private bank: readonly Sample[] = [];
+  /** Each channel's keymap, or an empty list for a channel with one recording. */
+  private keyZones: readonly (readonly KeyZone[])[] = [];
+  /** Each channel's SLICES — the pieces its recording was chopped into. */
+  private slices: readonly (readonly Slice[])[] = [];
+  /** Each channel's own wavetable spectrum, or null for the chip bank. */
+  private tables: readonly (readonly number[] | null)[] = [];
+  /**
    * The window each recording plays through, by name in any case — the takes.
    *
    * Resolved from `setTakes` rather than computed per note, because a chord asks
@@ -514,6 +541,16 @@ export class AudioEngine {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private steps = 0;
+  /**
+   * The span playback loops inside: step `loopFirst` up to but not including
+   * `loopLast`. The whole song unless a region is marked.
+   *
+   * Two numbers rather than one because a loop is a range and not a length: the
+   * `L` region in `F3` starts at bar 8, and a scheduler that only knew "loop
+   * every 32 steps" could not say that.
+   */
+  private loopFirst = 0;
+  private loopLast = 0;
   private nextStep = 0;
   private nextStepTime = 0;
   private step = -1;
@@ -531,6 +568,16 @@ export class AudioEngine {
   private soundAbsStep = -1;
   private pending: { step: number; abs: number; time: number }[] = [];
   private getStepNotes: StepNotesFn = () => [];
+  /**
+   * The stops this step makes, asked the same way as its notes.
+   *
+   * A second callback rather than a flag on a note, because a stop is not a note
+   * with something missing — it is the instruction to release what is already
+   * sounding, and a consumer that mistook one for the other would play a pitch
+   * the song never wrote. Empty by default, so a caller that only knows notes
+   * (every test, and the app before stops existed) schedules exactly as it did.
+   */
+  private getStepStops: (step: number, absoluteStep?: number) => readonly RowStop[] = () => [];
 
   constructor(options: AudioEngineOptions = {}) {
     this.borrowed = options.context ?? null;
@@ -830,9 +877,43 @@ export class AudioEngine {
     bank: readonly Sample[],
     names: readonly (string | null)[],
     padNames: readonly (string | null)[] = [],
+    zones: readonly (readonly KeyZone[])[] = [],
+    slices: readonly (readonly Slice[])[] = [],
   ): void {
     this.samples = names.map((name) => sampleByName(bank, name));
     this.padSamples = padNames.map((name) => sampleByName(bank, name));
+    this.bank = bank;
+    this.keyZones = zones;
+    this.slices = slices;
+  }
+
+  /**
+   * The recording a channel plays for a note: its keymap's, or its own.
+   *
+   * The keymap is asked FIRST and falls back to the channel's resolved recording,
+   * so a zone naming a file this machine does not have plays the channel's own
+   * sound rather than silence — the guarantee a channel without a keymap already
+   * gets, one register down.
+   */
+  private sampleFor(track: number, midi: number): Sample | null {
+    const zones = this.keyZones[track];
+    if (zones && zones.length > 0) {
+      const zoned = sampleByName(this.bank, zoneFor(zones, midi));
+      if (zoned !== null) return zoned;
+    }
+    return this.samples[track] ?? null;
+  }
+
+  /**
+   * Hand the engine each channel's own wavetable — its harmonic amplitudes, or
+   * null for a channel that wears the chip bank.
+   *
+   * Separate from `setSamples` because it is separate data with a separate reason
+   * to change (a table edit is not a bank edit), and because the pair of calls is
+   * made from the one place that restates what a channel plays.
+   */
+  setTables(tables: readonly (readonly number[] | null)[]): void {
+    this.tables = tables;
   }
 
   /** The recordings currently playing, one slot per channel, for a test. */
@@ -1300,15 +1381,27 @@ export class AudioEngine {
   // --- transport ------------------------------------------------------------
 
   /** Start looping from step 0. `steps` is how long the whole song is. */
-  start(steps: number, getStepNotes: StepNotesFn): void {
+  start(
+    steps: number,
+    getStepNotes: StepNotesFn,
+    getStepStops: (step: number, absoluteStep?: number) => readonly RowStop[] = () => [],
+    loop?: { first: number; last: number },
+  ): void {
     if (this.running) return;
     this.resume();
     if (!this.ctx) return;
     this.steps = Math.max(1, steps);
+    // A span is clamped to the song: a region marked in a longer song, then a
+    // shorter one loaded, is a loop that would never sound a note.
+    this.loopFirst = Math.max(0, Math.min(this.steps - 1, Math.round(loop?.first ?? 0)));
+    this.loopLast = Math.max(this.loopFirst + 1, Math.min(this.steps, Math.round(loop?.last ?? this.steps)));
     this.getStepNotes = getStepNotes;
+    this.getStepStops = getStepStops;
     this.running = true;
-    this.step = 0;
-    this.nextStep = 0;
+    // A marked region starts AT its first bar: pressing play to work on bars 9-16
+    // should put you there, not eight bars away from the loop you asked for.
+    this.step = this.loopFirst;
+    this.nextStep = this.loopFirst;
     this.absStep = 0;
     this.soundAbsStep = -1;
     this.pending = [];
@@ -1723,12 +1816,17 @@ export class AudioEngine {
       // fade has to keep moving through bars where nothing is playing — the whole
       // point of a fade-out is the silence at the end of it. Scheduled at the
       // step's own time, a lookahead ahead of the ear like every other event here.
-      if (this.automation.length > 0) this.applyLevelLanes(this.nextStep);
       // The step's notes, and how many of them each channel has: a channel's
       // notes in one step are ONE chord, so a chord of three answers 3. Counted
       // before the loop so a strum can spread the chord evenly, and counted here
       // rather than in `strumOffsets` so the same step is not walked twice.
+      //
+      // Read BEFORE the lanes because of the NOTE CLOCK: a lane counted from the
+      // hit has to know the hit is on this step, so its walk starts where the note
+      // does instead of one step late.
       const stepNotes = this.getStepNotes(this.nextStep, this.absStep);
+      for (const note of stepNotes) this.hitStep[note.track] = this.nextStep;
+      if (this.automation.length > 0) this.applyLevelLanes(this.nextStep);
       const chordSize = new Map<number, number>();
       for (const note of stepNotes) chordSize.set(note.track, (chordSize.get(note.track) ?? 0) + 1);
       const chordAt = new Map<number, number>();
@@ -1800,8 +1898,13 @@ export class AudioEngine {
         // length, at the channel's own glide, which is the note this line
         // scheduled before articulation existed. Exact, to the sample: `at: 0`
         // adds nothing and `length: 1` multiplies by one.
+        // Where in time this hit lands: the step's own moment, plus a strum's roll,
+        // plus the cell's `late` — a snare behind the beat is a fraction of a step,
+        // so the push is measured against THIS step's length and sounds the same at
+        // any tempo. Zero for every cell that never asked, which adds nothing.
+        const lateOffset = lateSeconds(note.late ?? 0, rowSeconds);
         for (const hit of articulationHits(note.articulation, this.glides[note.track] ?? 0)) {          this.playNote(
-            note.track, note.midi, feelTime + strumSeconds + hit.at * length,
+            note.track, note.midi, feelTime + strumSeconds + lateOffset + hit.at * length,
             length * hit.length,
             strike,
             // The hit's own variation, on top of the slides and gestures the model
@@ -1820,6 +1923,14 @@ export class AudioEngine {
             // pitch alone.
             this.nextStep,
             hold,
+            // How far into its sample this hit begins: `0` for every cell that
+            // has nothing to say about it, which adds nothing.
+            note.start ?? 0,
+            // And where it sits in the field: `0` is no lean, which builds no
+            // node — so a song that never pans carries the graph it always did.
+            note.pan ?? 0,
+            // And how it leaves: `0` is its own envelope, untouched.
+            note.fade ?? 0,
           );
         }
         // The pump: if this channel is a ducker, everybody else steps back for
@@ -1828,6 +1939,13 @@ export class AudioEngine {
         // sound never stops, so the duck never comes back up.
         this.duckOthers(note.track, feelTime, length);
         this.lastMidi[note.track] = note.midi;
+      }
+      // The row's STOPS, at the step's OWN time rather than a channel's feel: a
+      // stop says when a note ENDS, and the moment a player writes it is the
+      // moment it should end. Released before the machine's hits, so a step that
+      // stops a channel and starts a pad on it plays only the new note.
+      for (const stop of this.getStepStops(this.nextStep, this.absStep)) {
+        this.stopTrack(stop.track, this.nextStepTime, stop.stop);
       }
       // The MACHINE's hits for this step. Its grid is its own — a machine may
       // count a different beat from the song's rows — so the hits are asked for
@@ -1860,7 +1978,7 @@ export class AudioEngine {
       // longer if it is the first of a pair and shorter if it is the second. The
       // model owns the arithmetic so it can be tested; see `stepTimeFactor`.
       this.nextStepTime += rowSeconds * stepTimeFactor(this.swing, this.nextStep);
-      this.nextStep = (this.nextStep + 1) % this.steps;
+      this.nextStep = nextLoopStep(this.nextStep, this.loopFirst, this.loopLast);
       // The absolute count runs on past the loop point: the song starts over, the
       // performance does not.
       this.absStep += 1;
@@ -1884,7 +2002,12 @@ export class AudioEngine {
   /** Where a channel's level lane has it at the step being scheduled, if any. */
   private applyLevelLanes(step: number): void {
     for (let i = 0; i < this.chains.length; i++) {
-      const level = automatedLevel(this.automation, i + 1, this.levels[i] ?? MAX_LEVEL, step, this.rowsPerBar);
+      // Steps since this channel last played, for a lane on the note clock: a
+      // channel that has not played yet has nothing to count from, so the lane
+      // stays silent until its first hit.
+      const hit = this.hitStep[i];
+      const sinceHit = hit === undefined ? null : Math.max(0, step - hit);
+      const level = automatedLevel(this.automation, i + 1, this.levels[i] ?? MAX_LEVEL, step, this.rowsPerBar, sinceHit);
       if (level === null) continue;
       // Mute and solo still win: a lane moves how LOUD a channel is, never
       // whether it is heard, so the same `channelGain` that reads the song's own
@@ -1937,6 +2060,21 @@ export class AudioEngine {
     const base = this.pluginParams[track] ?? null;
     if (this.automation.length === 0) return base ?? undefined;
     return automatedPluginParams(base, this.automation, track + 1, this.nextStep, this.rowsPerBar) ?? base ?? undefined;
+  }
+
+  /**
+   * This channel's note-clock brightness curve, for the note being built.
+   *
+   * The step's length comes from the tempo at the step being scheduled, so a
+   * curve in a slow bar walks slower than the same curve in a fast one — the
+   * tempo map reaches a per-note envelope the same way it reaches the sequencer.
+   */
+  private brightCurveAt(track: number): BrightCurve | undefined {
+    if (this.automation.length === 0) return undefined;
+    const points = noteClockCurve(this.automation, track + 1, 'bright');
+    if (points === null || points.length < 2) return undefined;
+    const stepSeconds = secondsPerRow(this.bpmAt(this.nextStep), this.rowsPerBeat, this.speed);
+    return { points, stepSeconds };
   }
 
   /** A channel's gate at the step being scheduled: the lane's, or its own. */
@@ -1992,6 +2130,22 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * Silence a channel's sounding voices, at a scheduled moment.
+   *
+   * The live half of `off`/`cut`: the notes are already scheduled into the audio
+   * graph, so ending one early means releasing the graphs it is made of — through
+   * the same `releaseNote` a stolen voice uses, with the stop's own fade. The
+   * list is emptied rather than left to the `onended` handler, because the next
+   * note on the channel must not think these are still ringing.
+   */
+  private stopTrack(track: number, at: number, stop: StopId): void {
+    const voices = this.trackVoices.get(track);
+    if (!voices || voices.length === 0) return;
+    for (const voice of voices) releaseNote(voice.graph, at, STOP_FADE[stop]);
+    voices.length = 0;
+  }
+
   private playNote(
     track: number,
     midi: number,
@@ -2008,10 +2162,29 @@ export class AudioEngine {
     drum: DrumId | null = null,
     step: number | null = null,
     holdSteps = 1,
+    /** How far into its recording the hit begins, as a percentage of the window
+     * it plays — the cell's `start`, threaded here because the window is built
+     * HERE and nowhere else. `0` begins at the recording's own start. */
+    startPercent = 0,
+    /** Where this hit sits in the field, -100..100, RELATIVE to the channel:
+     * the channel's own pan still leans the strip and this leans the hit inside
+     * it. `0` builds no node at all, which is every hit that never asked. */
+    panPercent = 0,
+    /** How much of the note's length it fades through, as a percentage, applied
+     * to the whole voice: `0` builds no stage and leaves the envelope alone. */
+    fadePercent = 0,
   ): void {
     const ctx = this.ctx;
     const out = this.chains[track]?.input ?? this.chains[0]?.input;
     if (!ctx || !out) return;
+    // One stereo stage for THIS hit when it sits off centre, made here and kept
+    // in the voice's nodes so disposal stays one rule for every graph.
+    // The two stages a MOVED hit can have, built in the order the signal meets
+    // them: the fade takes the whole voice down, then the panner leans what is
+    // left. Both are optional, so a hit that asks for neither builds nothing.
+    const fall = fadePercent > 0 ? fadeStage(ctx, out, at, duration, fadePercent) : null;
+    const stage = panPercent === 0 ? null : panStage(ctx, fall ?? out, panPercent);
+    const target = stage ?? fall ?? out;
 
     // A channel on a plugin instrument renders rather than synthesizes: the
     // plugin's pure samples through a buffer source into the channel's OWN
@@ -2057,6 +2230,9 @@ export class AudioEngine {
     // A lane that moves a voice knob rebuilds layer 1 for this note only, so the
     // layers stacked above it keep their own settings and the layer's own copy is
     // left alone — the next note asks the model again.
+    // The recording this note plays, chosen by its register when the channel has a
+    // keymap — resolved before the patch so the layers below all agree on it.
+    const played = this.sampleFor(track, midi);
     const base = this.patches[track] ?? patchFromVoice(DEFAULT_VOICE);
     // A drum hit on a `wave font` channel plays the FONT'S OWN KIT, which no
     // `duty` can name (see `prepareFontVoice`). The channel's font voice is
@@ -2065,7 +2241,7 @@ export class AudioEngine {
     // other drum hit keeps the kit's voice exactly as it always has.
     const fontDrum = drum !== null && firstLayer(base).wave === 'font';
     const patch = automated && !fontDrum ? patchWithVoice(base, automated) : base;
-    const voice = buildNote(ctx, patch, midi, at, duration, out, this.noiseBuffer, {
+    const voice = buildNote(ctx, patch, midi, at, duration, target, this.noiseBuffer, {
       velocity,
       glide,
       fromMidi,
@@ -2078,12 +2254,34 @@ export class AudioEngine {
       tonic: this.tonic,
       font: this.font,
       drum: fontDrum ? drum : null,
-      sample: this.samples[track] ?? null,
+      // The recording THIS NOTE plays: the keymap's zone for its register, or the
+      // channel's own when it has no keymap (or the zone names a file this machine
+      // does not have). Resolved once, here, so the window below is the same file's.
+      sample: played,
       // The take's window, when the RECORDER page has shaped one for this
       // recording: the trim a note starts and ends at, and its loop. A bank
       // entry with no take behind it plays whole, which is what it always did.
-      sampleWindow: this.sampleWindowFor(this.samples[track] ?? null),
+      // A sliced channel plays the PIECE its note lands on, which is the window
+      // the take's trim would otherwise give it: one recording, many instruments.
+      // Where in the file this hit begins: the piece its register lands on (or
+      // the take's window), then the cell's own SEEK inside that window — so a
+      // note on a slice skips a quarter of the PIECE, not of the recording it was
+      // cut from. Guarded because a channel with no sample has no window at all.
+      sampleWindow: (() => {
+        const window = sliceWindowFor(this.slices[track] ?? [], midi) ?? this.sampleWindowFor(played);
+        return window ? seekWindow(window, startPercent) : window;
+      })(),
+      // A lane on the note clock that moves brightness: the note walks the lane's
+      // own points across its filter, so the sweep happens INSIDE the note rather
+      // than once per section. Undefined for every channel that has no such lane,
+      // which is every channel in a song that never asked.
+      brightCurve: this.brightCurveAt(track),
+      // The channel's own table, when it has one: a `wave table` voice wears a
+      // spectrum the author wrote instead of the bank entry its `duty` picks.
+      table: this.tables[track] ?? undefined,
     });
+    if (fall) voice.nodes.push(fall);
+    if (stage) voice.nodes.push(stage);
     this.voices.add(voice);
     held.push({ graph: voice, startedAt: at, velocity });
     this.trackVoices.set(track, held);

@@ -15,6 +15,9 @@ import {
   AUTOMATION_TARGETS,
   automationTargetInfo,
   clampAutomationValue,
+  clampNoteClockStep,
+  laneClock,
+  supportsNoteClock,
   type AutomationLane,
   type AutomationTargetId,
 } from '../model/automation';
@@ -65,8 +68,9 @@ import { trackColor } from './trackColor';
  *
  * ── Editing ─────────────────────────────────────────────────────────────────
  * `INS` adds a lane, `DEL` takes one out, `TAB` cycles the target, `[`/`]` step
- * the selection, the arrows nudge a value, and `,`/`.` and `;`/`'` move or resize
- * its bars; a click selects a lane and a drag on a handle or the line moves it.
+ * the selection, the arrows nudge a value, `\` switches the selected lane between
+ * BARS and STEPS-SINCE-THE-HIT, and `,`/`.` and `;`/`'` move or resize its bars; a
+ * click selects a lane and a drag on a handle or the line moves it.
  * The inspector's controls and the lane editor's `+ LANE` do the same work with a
  * mouse. A drag is ONE undo step (the scene banks it at pointer-down) and a key
  * press or a control click is one edit. Everything the page writes goes through
@@ -388,6 +392,10 @@ export class ArrangerView {
         e.preventDefault();
         this.resizeSelected('end', 1, bars);
         return;
+      case 'Backslash':
+        e.preventDefault();
+        this.toggleClock();
+        return;
       case 'Space':
         e.preventDefault();
         this.handlers.togglePlay();
@@ -459,6 +467,38 @@ export class ArrangerView {
     this.handlers.beginLaneEdit();
     this.handlers.setLane(this.selectedLane, { ...lane, from, to });
     this.status = `${automationTargetInfo(lane.target)?.label ?? lane.target}  ${from} -> ${to}`;
+    this.render();
+  }
+
+  /**
+   * Switch the selected lane between the song's clock and the note's.
+   *
+   * The two clocks are the same line read against different rulers: BARS is the
+   * order (a filter opening over eight bars) and STEPS is the note (a filter
+   * opening over the six steps after every hit). The range is carried across as
+   * it stands, clamped to what a note can hold, so a lane keeps its SHAPE in the
+   * numbers it had — `20 -> 90` stays `20 -> 90` and only the ruler changes.
+   *
+   * A target that is read once, when the note is built, is refused with a reason
+   * rather than silently written and ignored: `laneClock` would answer `bars` for
+   * it anyway, so the toggle would look broken. The two that CAN move this way are
+   * `level` (rewritten every step) and `bright` (scheduled across the note).
+   */
+  private toggleClock(): void {
+    const lane = this.selectedLaneValue();
+    if (!lane) return;
+    const label = automationTargetInfo(lane.target)?.label ?? lane.target;
+    if (!supportsNoteClock(lane.target)) {
+      this.status = `${label}: BARS ONLY \u2014 A NOTE CLOCK NEEDS LEVEL OR BRIGHT`;
+      this.render();
+      return;
+    }
+    const clock = laneClock(lane) === 'note' ? 'bars' : 'note';
+    const start = clock === 'note' ? clampNoteClockStep(lane.startBar) : Math.max(1, lane.startBar);
+    const end = clock === 'note' ? clampNoteClockStep(lane.endBar) : Math.max(start, lane.endBar);
+    this.handlers.beginLaneEdit();
+    this.handlers.setLane(this.selectedLane, { ...lane, clock, startBar: start, endBar: Math.max(start, end) });
+    this.status = `${label}  ${clock === 'note' ? 'STEPS SINCE THE HIT' : 'BARS'}`;
     this.render();
   }
 
@@ -954,7 +994,7 @@ export class ArrangerView {
     // The footer: what the last edit said, or how to make a lane.
     const picked = this.handlers.lanes()[this.selectedLane];
     const note = picked
-      ? `${(automationTargetInfo(picked.target)?.label ?? picked.target).toUpperCase()}  ${picked.from} -> ${picked.to}  \u00b7  BARS ${picked.startBar}-${picked.endBar}`
+      ? `${(automationTargetInfo(picked.target)?.label ?? picked.target).toUpperCase()}  ${picked.from} -> ${picked.to}  \u00b7  ${laneClock(picked) === 'note' ? 'STEPS' : 'BARS'} ${picked.startBar}-${picked.endBar}`
       : this.status !== ''
         ? this.status
         : drawn === 0

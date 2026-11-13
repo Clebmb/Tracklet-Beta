@@ -199,7 +199,7 @@ note — is checkable, and the app checks it before it changes a single cell.
 ## Quick answers to the obvious questions
 
 **Can an agent write an entire song?** Yes: `steps 512` is 32 bars in one
-pattern, and up to 64 patterns is available, so a whole arrangement fits in one
+pattern, and up to 128 patterns is available, so a whole arrangement fits in one
 script. Practically, longer is not better for a first pass — ask for one bar, then
 grow it.
 

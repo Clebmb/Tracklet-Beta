@@ -186,7 +186,7 @@ describe('calling a tool over the pipe', () => {
     if (!answer || 'error' in answer) throw new Error('the tool call was refused');
     const result = answer.result as { content: { text: string }[]; isError?: boolean };
     expect(result.isError).toBeUndefined();
-    expect(JSON.parse(result.content[0]?.text ?? '')).toMatchObject({ tracks: { max: 8 } });
+    expect(JSON.parse(result.content[0]?.text ?? '')).toMatchObject({ tracks: { max: 16 } });
   });
 
   it('answers a refused script as a tool error with its line numbers', async () => {

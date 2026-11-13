@@ -37,7 +37,9 @@ import {
   MAX_AUTOMATION_LANES,
   clampAutomationBar,
   clampAutomationTrack,
+  clampNoteClockStep,
   isAutomationTarget,
+  laneClock,
   lanesToScript,
   pluginParamTargetKnob,
   sortAutomationLanes,
@@ -246,8 +248,13 @@ import {
   MIN_TRACKS,
   MIN_VELOCITY,
   patternRows,
+  emptyCell,
+  cellStop,
   setCellDrum,
   setCellNotes,
+  setCellStop,
+  stopFromName,
+  setPatternLength,
   setPatternRows,
   setTrackCount,
   sortTempoMap,
@@ -256,6 +263,7 @@ import {
   type ChannelEffects,
   type GrooveId,
   type Song,
+  type StopId,
   type TempoPoint,
   type TrackFx,
 } from './song';
@@ -263,6 +271,10 @@ import { DEFAULT_SHAPE, isFilterShape, shapeFromName, shapeNames, type FilterSha
 import { drumFromName, drumNames, drumPitch, type DrumId } from './drum';
 import { DEFAULT_KIT, kitFromName, kitNameProblem, kitNames, KIT_IDS, sameKitName, tidyKitName, type KitName } from './kit';
 import { sampleNameProblem, tidySampleName } from './sample';
+import { clampZoneNote, MAX_ZONES, tidyZones, type KeyZone } from './zone';
+import { clampSlice, MAX_SLICES, tidySlices, type Slice } from './slice';
+import { clampFade, clampLate, MAX_FADE, MAX_LATE, MAX_START, startFraction, tidyCredits, TRACKS_PER_BANK } from './song';
+import { clampHarmonic, MAX_TABLE_NAME, tidyTable, type WaveTable } from './wavetable';
 import { parsePluginVoiceRef, pluginVoiceRef, type PluginParamValues } from '../plugins/instrument';
 import {
   clampHitVelocity,
@@ -705,8 +717,119 @@ export const PLUGIN_LOCK_SONG_FILE_VERSION = 45;
  * version its other features earned.
  */
 export const PLUGIN_PARAMS_SONG_FILE_VERSION = 46;
+/**
+ * A song with a STOP in it writes version 47, the newest.
+ *
+ * The drum's reason, one word over: a stop is a step that holds nothing but the
+ * instruction to end a note, so a build that predates it would read the cell as
+ * empty and save it that way — the pad would ring for its whole `hold` and the
+ * file would have no way left to say it was ever supposed to stop. A song with
+ * no stops writes the version its other features earned.
+ */
+export const STOP_SONG_FILE_VERSION = 47;
+/**
+ * A song with a NOTE-CLOCK lane writes version 48, the newest.
+ *
+ * The stop's reason again, in the numbers rather than in the cells: a lane's two
+ * range numbers used to mean bars and can now mean STEPS SINCE A HIT, and the
+ * word that says which (`clock`) is a key an older build drops without a word. It
+ * would then walk the lane across bars 0 to 6 — the hit at every bar line, the
+ * sweep nowhere near the note — and save it back that way, with nothing in the
+ * file left to say it was meant to follow each note. A song with no note-clock
+ * lane writes the version its other features earned.
+ */
+export const NOTE_CLOCK_SONG_FILE_VERSION = 48;
 /** The newest file version this build understands: what OPEN reads up to. */
-export const SONG_FILE_VERSION_MAX = PLUGIN_PARAMS_SONG_FILE_VERSION;
+/**
+ * Version 49: a channel may hold a KEYMAP.
+ *
+ * Its own version for the sample's reason: an older build would keep the channel's
+ * one recording and play every register from it, which is a different instrument
+ * from the one that was written — and silently so, since the notes are all there.
+ */
+export const ZONES_SONG_FILE_VERSION = 49;
+/**
+ * Version 50: a channel may be SLICED.
+ *
+ * Its own version because a slice is a promise about WHERE the pieces are: an
+ * older build would play the recording whole from every note, which is the same
+ * file played as one long sample instead of as an instrument.
+ */
+export const SLICES_SONG_FILE_VERSION = 50;
+/**
+ * Version 51: a channel may wear a WAVETABLE OF ITS OWN.
+ *
+ * Its own version because the spectrum is data an older build has no way to hear:
+ * it would play the `duty`'s bank entry instead, which is a different instrument
+ * wearing the same name.
+ */
+export const TABLE_SONG_FILE_VERSION = 51;
+/**
+ * Version 52: a cell may land LATE.
+ *
+ * Its own version because the push is a fourth slot in a cell, and an older build
+ * refuses a cell it cannot read rather than playing the hit on the step — which
+ * would silently straighten a groove that was written off the grid on purpose.
+ */
+export const LATE_SONG_FILE_VERSION = 52;
+/**
+ * Version 53: a hit may SEEK into its sample (the fifth cell slot).
+ *
+ * Its own rung rather than riding 52: an older build would refuse the cell, and
+ * refusing is the honest answer here — the file asked to skip an attack, so
+ * playing that attack would be a different sound rather than a plainer one.
+ */
+export const SEEK_SONG_FILE_VERSION = 53;
+
+/**
+ * Version 54: a hit may sit off centre (the sixth cell slot).
+ *
+ * Its own rung: an older build would play the hit dead centre, which is not a
+ * refusal and not silence — it is a stereo picture that quietly went mono, the
+ * kind of loss you only notice on headphones.
+ */
+export const PAN_SONG_FILE_VERSION = 54;
+
+/**
+ * Version 55: a hit may FADE through part of its own length (the seventh slot).
+ *
+ * Its own rung for the sharpest reason yet: an older build plays the note for its
+ * whole hold at full level, which is a note that ends by being cut rather than by
+ * falling — audibly a different sound, and the one thing the author wrote the
+ * line to avoid.
+ */
+export const FADE_SONG_FILE_VERSION = 55;
+
+/**
+ * Version 56: the song carries CREDITS — who made it and what it borrows.
+ *
+ * Its own rung because an older build would DROP the line and then save the song
+ * back without it: the one piece of a song that is about a person rather than a
+ * sound, lost silently. The music plays the same either way, which is exactly why
+ * a version is the only thing that can protect it.
+ */
+export const CREDITS_SONG_FILE_VERSION = 56;
+
+/**
+ * Version 57: the song has MORE THAN EIGHT channels.
+ *
+ * A version rung rather than a plain count, because an older build reads a song
+ * with nine channels and then saves it back with eight: the ninth channel's notes
+ * are gone, and nothing anywhere said so. The grid shows sixteen as two banks, so
+ * the cells keep the width they had.
+ */
+export const SIXTEEN_TRACKS_SONG_FILE_VERSION = 57;
+
+/**
+ * Version 58: two patterns of DIFFERENT LENGTHS.
+ *
+ * A rung because an older build reads each pattern's rows and then resizes them
+ * all to the file's `steps`, which is the shorter one's length — a chorus cut to
+ * sixteen steps and saved that way, with nothing said. The rows themselves were
+ * always per pattern; the flattening was the reader's.
+ */
+export const PATTERN_LENGTH_SONG_FILE_VERSION = 58;
+export const SONG_FILE_VERSION_MAX = PATTERN_LENGTH_SONG_FILE_VERSION;
 /** The extension a saved script gets. */
 export const SCRIPT_FILE_EXTENSION = '.txt';
 /** The extension a saved song gets. */
@@ -757,6 +880,9 @@ export function songToScript(song: Song, settings: ScriptSettings = { volume: nu
   lines.push('');
   lines.push('new');
   lines.push(`song "${scriptTitle(song.title)}"`);
+  // The credits travel with the song it credits, in the spelling the parser
+  // reads back — so SAVE and APPLY are still inverses.
+  if (song.credits !== undefined && song.credits.trim() !== '') lines.push(`credits "${scriptTitle(song.credits)}"`);
   lines.push(`key ${keyScript(song.key)}`);
   lines.push(`tempo ${song.bpm}`);
   // One line per tempo change, in bar order, written exactly as the parser reads
@@ -912,6 +1038,25 @@ export function songToScript(song: Song, settings: ScriptSettings = { volume: nu
       lines.push(`layer ${i + 1} ${j + 2}${layerScript(layer, below)}`);
     });
   });
+  // A KEYMAP is written under its channel too, one `zone` line per boundary in the
+  // order the model holds them — so a saved script rebuilds the same keyboard, and
+  // the note is written as a NUMBER because that is what the model holds.
+  song.tracks.forEach((track, i) => {
+    for (const zone of track.zones ?? []) {
+      lines.push(`zone ${i + 1} ${zone.note} ${zone.sample}`);
+    }
+    // A SLICE is its own statement too, in the order the pieces play: `slice 1 0
+    // 0.42` then the next. The numbers are seconds as the model holds them, so a
+    // script round trip chops the same recording in the same places.
+    for (const slice of track.slices ?? []) {
+      lines.push(`slice ${i + 1} ${Number(slice.start.toFixed(3))} ${Number(slice.end.toFixed(3))}`);
+    }
+    // And a table of the channel's own, one line: the name, then the spectrum, so
+    // a script round trip wears the same shape it wore.
+    if (track.table !== undefined) {
+      lines.push(`table ${i + 1} ${track.table.name} ${track.table.harmonics.join(' ')}`);
+    }
+  });
   // A seated plugin effect is its own statement, like a layer above the voice:
   // `fx 2 com.example.bitcrush-plus 45` seats the chain in order, and a
   // channel that seats none says nothing — which is every channel of every
@@ -948,6 +1093,10 @@ export function songToScript(song: Song, settings: ScriptSettings = { volume: nu
   song.patterns.forEach((pattern, i) => {
     lines.push('');
     lines.push(`pattern ${i + 1} "${scriptTitle(pattern.name)}"`);
+    // A pattern of its own length says so, on the line before its grid: the song's
+    // `steps` cannot describe it, and a reader that assumed the song's length
+    // would cut the pattern's tail off.
+    if (pattern.steps.length !== rows) lines.push(`steps ${pattern.steps.length} pattern ${i + 1}`);
     const body = gridLines(pattern.steps.map((row) => row.map(cellText)), song.tracks.length);
     for (const line of body) lines.push(line);
   });
@@ -1042,12 +1191,37 @@ function cellText(cell: {
   note: number | null;
   extra?: number[];
   drum?: DrumId | null;
+  /** A STOP: written as the word the grid reads back, `off` or `cut`. */
+  gesture?: StopId | null;
   velocity: number;
   slide?: boolean;
   stutter?: number;
   grace?: number;
   bend?: number;
+  late?: number;
+  start?: number;
+  pan?: number;
+  fade?: number;
 }): string {
+  // The clauses a cell carries, in the SAME spelling the grid parser reads back:
+  // `C-4:late2:pan-30`. They are written here because a script is how a song
+  // travels — and a writer that dropped them would save a phrased song as a
+  // straight one, which is data loss no error message would ever announce.
+  const clauses: string[] = [];
+  const late = clampLate(cell.late ?? 0);
+  if (late > 0) clauses.push(`late${late}`);
+  if (cell.start !== undefined && startFraction(cell.start) > 0) clauses.push(`seek${Math.round(startFraction(cell.start) * 100)}`);
+  if (cell.pan !== undefined && clampPan(cell.pan) !== 0) clauses.push(`pan${clampPan(cell.pan)}`);
+  const fade = cell.fade !== undefined ? clampFade(cell.fade) : 0;
+  if (fade > 0) clauses.push(`fade${fade}`);
+  const suffix = clauses.length > 0 ? `:${clauses.join(':')}` : '';
+  // A STOP is a word, in the same three characters every other cell uses: the
+  // script writes `off` and reads `off` back, which is what keeps SAVE and APPLY
+  // inverses now that a step can end a note instead of starting one.
+  // Read through `?? null` here rather than `cellStop`, because this function
+  // takes the narrow shape the script writer needs rather than a whole `Cell`.
+  const stop = cell.gesture ?? null;
+  if (stop !== null) return stop;
   if (cell.note === null) return '...';
   // A DRUM is written as the word the grid reads back — `kick`, or `hat*3` — so a
   // kit written out is a script that APPLIES to the same kit, and the pitches the
@@ -1055,7 +1229,7 @@ function cellText(cell: {
   if (cell.drum !== undefined && cell.drum !== null) {
     const articulation_ = articulationText(tidyArticulation({ slide: cell.slide, stutter: cell.stutter, grace: cell.grace, bend: cell.bend }));
     const force = clampVelocity(cell.velocity) === MAX_VELOCITY ? '' : `~${clampVelocity(cell.velocity)}`;
-    return `${cell.drum}${articulation_}${force}`;
+    return `${cell.drum}${articulation_}${force}${suffix}`;
   }
   // A chord is spelled the way the grid parser reads one back: the notes, in the
   // cell's order, separated by commas. The width is measured across the grid (see
@@ -1064,7 +1238,7 @@ function cellText(cell: {
   const articulation = articulationText(tidyArticulation({ slide: cell.slide, stutter: cell.stutter, grace: cell.grace, bend: cell.bend }));
   const velocity = clampVelocity(cell.velocity);
   const force = velocity === MAX_VELOCITY ? '' : `~${velocity}`;
-  return `${note}${articulation}${force}`;
+  return `${note}${articulation}${force}${suffix}`;
 }
 
 /**
@@ -1296,6 +1470,42 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
   // the built-in sound, so the part would come back with the wrong instrument on
   // it and no sign that anything had been lost.
   const sampled = song.tracks.some((track) => track.sample !== null);
+  // And a song with a KEYMAP writes version 49: an older build would play every
+  // register from the channel's one recording, which is a different instrument.
+  const zoned = song.tracks.some((track) => (track.zones?.length ?? 0) > 0);
+  // And a SLICED song writes version 50: an older build would play the recording
+  // whole from every note, turning a chop back into one long sample.
+  const sliced = song.tracks.some((track) => (track.slices?.length ?? 0) > 0);
+  // And a channel with a TABLE OF ITS OWN writes version 51: an older build would
+  // play the bank entry its `duty` picks, which is a different sound entirely.
+  const tabled = song.tracks.some((track) => track.table !== undefined && track.table !== null);
+  // And a song with a hit written LATE writes version 52: the push is a fourth
+  // slot in a cell, which an older build refuses rather than straightening.
+  const pushedLate = song.patterns.some((pattern) => pattern.steps.some(
+    (row) => row.some((cell) => clampLate(cell.late ?? 0) > 0),
+  ));
+  // And a song whose hits SEEK into their samples writes version 53, which is
+  // its own rung: an older build refuses the cell rather than playing the attack
+  // the file said to skip, which would be a different sound, not a plainer one.
+  const seeks = song.patterns.some((pattern) => pattern.steps.some(
+    (row) => row.some((cell) => cell.start !== undefined && startFraction(cell.start) > 0),
+  ));
+  // And a song whose hits sit OFF CENTRE writes version 54.
+  const panned = song.patterns.some((pattern) => pattern.steps.some(
+    (row) => row.some((cell) => cell.pan !== undefined && clampPan(cell.pan) !== 0),
+  ));
+  // And a song whose notes FADE writes version 55.
+  const fading = song.patterns.some((pattern) => pattern.steps.some(
+    (row) => row.some((cell) => cell.fade !== undefined && clampFade(cell.fade) > 0),
+  ));
+  // And a song that credits somebody writes version 56.
+  const credited = song.credits !== undefined && song.credits.trim() !== '';
+  // And a song with more than one BANK of channels writes version 57: eight was
+  // the ceiling every earlier build knows, so a ninth channel would be dropped on
+  // the way back out.
+  const manyTracks = song.tracks.length > TRACKS_PER_BANK;
+  // And a song whose patterns are not all the same length writes version 58.
+  const uneven = song.patterns.some((pattern) => pattern.steps.length !== patternRows(song));
   // And a song whose channels VARY their hits writes version 34: an older build
   // would play every hit identically, which is precisely the difference these two
   // settings exist to make — the reason `shape` got version 21 and the effects got
@@ -1351,14 +1561,47 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
   const locked = Object.keys(pluginVersions).length > 0;
   // And a song that turns a plugin instrument's KNOBS writes version 46, the
   // newest: the values are a key an older build would drop without a word.
-  const paramed = song.tracks.some((track) => track.pluginParams !== null);
+    const paramed = song.tracks.some((track) => track.pluginParams !== null);
+  // And a song with a STOP in it writes version 47, the newest: an older build
+  // would read a stop cell as an empty step and save it that way, so the note it
+  // was meant to end would ring for its whole hold and nothing would be left to
+  // say otherwise.
+  const stopped = song.patterns.some((pattern) => pattern.steps.some((row) => row.some((cell) => cellStop(cell) !== null)));
   // And a song with a CHORD LOOP writes version 28: an older build would drop it
   // and keep the cells the followers wrote, so the song that came back would have
   // the right notes and no way to write the next bar of them.
   const looped = song.progression !== null;
+  // And a song with a lane on the NOTE CLOCK writes version 48, the newest of all:
+  // its two range numbers mean steps since a hit rather than bars, and an older
+  // build would walk them across the song and lose the `clock` key that said so.
+  const noteClocked = song.automation.some((lane) => laneClock(lane) === 'note');
   const file: Record<string, unknown> = {
     format: SONG_FILE_FORMAT,
-    version: paramed
+    version: noteClocked
+      ? NOTE_CLOCK_SONG_FILE_VERSION
+      : uneven
+      ? PATTERN_LENGTH_SONG_FILE_VERSION
+      : manyTracks
+      ? SIXTEEN_TRACKS_SONG_FILE_VERSION
+      : credited
+      ? CREDITS_SONG_FILE_VERSION
+      : fading
+      ? FADE_SONG_FILE_VERSION
+      : panned
+      ? PAN_SONG_FILE_VERSION
+      : seeks
+      ? SEEK_SONG_FILE_VERSION
+      : pushedLate
+      ? LATE_SONG_FILE_VERSION
+      : tabled
+      ? TABLE_SONG_FILE_VERSION
+      : sliced
+      ? SLICES_SONG_FILE_VERSION
+      : zoned
+      ? ZONES_SONG_FILE_VERSION
+      : stopped
+      ? STOP_SONG_FILE_VERSION
+      : paramed
       ? PLUGIN_PARAMS_SONG_FILE_VERSION
       : locked
       ? PLUGIN_LOCK_SONG_FILE_VERSION
@@ -1431,6 +1674,9 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
   // for the sample's reason, one list out.
   if (locked) file.pluginVersions = { ...pluginVersions };
   file.title = song.title;
+  // Who made it, when the song says. Written only when it says something, so an
+  // uncredited song is the file it always was.
+  if (song.credits !== undefined && song.credits.trim() !== '') file.credits = song.credits;
   file.key = { root: tonicName(song.key.tonic), scale: song.key.scale };
   file.bpm = song.bpm;
   file.stepsPerBeat = song.rowsPerBeat;
@@ -1457,6 +1703,10 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
       from: lane.from,
       to: lane.to,
       bars: [lane.startBar, lane.endBar],
+      // Only when it is the other clock: a bar lane writes exactly what it always
+      // did, so a song that never asked for the note clock is byte for byte the
+      // file it was.
+      ...(laneClock(lane) === 'note' ? { clock: 'note' as const } : {}),
     }));
   }
   // The FORM, and only when the song has one: the named sections it is written
@@ -1579,6 +1829,19 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
     // A channel that plays its own built-in sound names no sample, which is every
     // channel in every song written before a sample could be named.
     ...(track.sample === null ? {} : { sample: track.sample }),
+    // The keymap, and no key at all on a channel that plays one recording in every
+    // register — which is every channel in every song written before keyzones.
+    ...((track.zones?.length ?? 0) === 0
+      ? {}
+      : { zones: track.zones!.map((zone) => ({ note: zone.note, sample: zone.sample })) }),
+    // The slices, and no key on a channel that plays its recording whole.
+    ...((track.slices?.length ?? 0) === 0
+      ? {}
+      : { slices: track.slices!.map((slice) => ({ start: slice.start, end: slice.end })) }),
+    // The channel's own table, and no key on a channel that wears the chip bank.
+    ...(track.table === undefined
+      ? {}
+      : { table: { name: track.table.name, harmonics: [...track.table.harmonics] } }),
     // And the plugin instrument it names, and no key at all on a channel that
     // names none: absent means its built-in voice, which is every file written
     // before a plugin could be named.
@@ -1617,9 +1880,34 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
     // still the bare number it has always been, and a song of single notes is
     // byte-for-byte the file this app wrote before a cell could hold a chord.
     steps: pattern.steps.map((row) => row.map((cell) => {
+      // A STOP is a bare WORD — `"off"` — exactly the shape a drum's word takes,
+      // and for the same reason: a string where a number belongs says "this step
+      // is not a pitch", and the only two strings a step can be are a drum's name
+      // and a stop's, which `drumFromName` and `stopFromName` tell apart. It is a
+      // bare word rather than a one-element list because a stop has no force to
+      // carry, so there is no second slot it could ever need.
+      const stop = cellStop(cell);
+      if (stop !== null) return stop;
       if (cell.note === null) return null;
       const velocity = clampVelocity(cell.velocity);
       const articulation = articulationText(tidyArticulation({ slide: cell.slide, stutter: cell.stutter, grace: cell.grace, bend: cell.bend }));
+      // A hit that lands LATE needs a fourth slot, because neither the force nor
+      // the articulation can carry a time. Only a pushed cell grows into one, so
+      // every cell on the step still writes the two or three slots it always did.
+      const late = clampLate(cell.late ?? 0);
+      // Where the hit begins in its sample is the FIFTH slot, and only written
+      // when the cell asks for it — a cell that seeks but is on the step writes
+      // `[…, 0, 25]`, because a slot cannot be skipped in the middle of a list.
+      const start = cell.start !== undefined ? Math.round(startFraction(cell.start) * 100) : 0;
+      // And which way it leans is the SIXTH, for the same reason: a slot cannot
+      // be skipped, so a panning hit writes zeros for the two before it.
+      const pan = cell.pan !== undefined ? clampPan(cell.pan) : 0;
+      // And how it leaves is the SEVENTH: four numbers of nothing before it, but a
+      // slot cannot be skipped, and a cell that fades but never moved is still a
+      // cell an older build would play wrong.
+      const fade = cell.fade !== undefined ? clampFade(cell.fade) : 0;
+      const moved = late > 0 || start > 0 || pan !== 0 || fade > 0;
+      const pushed = <T>(parts: T[]) => (moved ? [...parts, late, start, pan, fade] : parts);
       // A DRUM puts its WORD in the first slot — `["kick"]`, or `["kick", 80]`
       // when it is not at full force. A string where a number (or a list of them)
       // belongs says "this hit is a named drum", which is the same trick the list
@@ -1628,6 +1916,7 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
       // (`drum.ts`), not about this song. A bare `"kick"` is written when the hit
       // is plain, so the shape stays as small as the note it stands in for.
       if (cell.drum !== null) {
+        if (moved) return pushed([cell.drum, velocity, articulation]);
         if (articulation !== '') return [cell.drum, velocity, articulation];
         return velocity === MAX_VELOCITY ? cell.drum : [cell.drum, velocity];
       }
@@ -1639,8 +1928,10 @@ export function songToJson(song: Song, settings: ScriptSettings = { volume: null
       // avoid. A single note keeps the bare form it always had, so a song whose
       // cells each hold one note still writes the bytes it always wrote.
       if (Array.isArray(pitches)) {
+        if (moved) return pushed([pitches, velocity, articulation]);
         return articulation !== '' ? [pitches, velocity, articulation] : [pitches, velocity];
       }
+      if (moved) return pushed([pitches, velocity, articulation]);
       if (articulation !== '') return [pitches, velocity, articulation];
       return velocity === MAX_VELOCITY ? pitches : [pitches, velocity];
     })),
@@ -1993,6 +2284,15 @@ export function songFromJson(text: string): SongFileParse {
 
   const song = createSong();
   song.title = title;
+  // Free text, so a value that is not a string is refused by name rather than
+  // dropped: a credit that silently disappears is somebody's name not arriving.
+  if (raw.credits !== undefined && raw.credits !== null) {
+    if (typeof raw.credits !== 'string') {
+      errors.push('"credits" must be text, e.g. "MADE BY ... — break from a 1972 record".');
+    } else {
+      song.credits = tidyCredits(raw.credits);
+    }
+  }
   song.key = key;
   song.bpm = clampBpm(bpm);
   song.rowsPerBeat = clampRowsPerBeat(stepsPerBeat);
@@ -2043,6 +2343,18 @@ export function songFromJson(text: string): SongFileParse {
     // file that name means is the app's business, and the engine falls back to
     // the built-in one-shot when there is no such file.
     track.sample = source.sample;
+    // And the keymap, as copies: a later edit to the song must never reach back
+    // into what the file parsed. An empty map is written as absent, so a channel
+    // with one recording saves exactly the file it always did.
+    // Left ABSENT when the file had none, rather than an empty list: a channel
+    // with one recording is what every earlier file describes, and saying it with
+    // `[]` would make a load change the song it just read.
+    if (source.zones.length > 0) track.zones = source.zones.map((zone) => ({ ...zone }));
+    // And the slices, as copies, and left absent for the same reason: a channel
+    // that plays its recording whole saves exactly the file it always did.
+    if (source.slices.length > 0) track.slices = source.slices.map((slice) => ({ ...slice }));
+    // And the table, as a copy, and left absent when the channel wears the bank.
+    if (source.table !== null) track.table = { name: source.table.name, harmonics: [...source.table.harmonics] };
     // The plugin instrument it named, if it named one. Nothing is resolved here:
     // which code that id means is the app's business, and the engine falls back
     // to the channel's built-in voice when there is no such plugin.
@@ -2061,6 +2373,12 @@ export function songFromJson(text: string): SongFileParse {
   patterns.forEach((source, i) => {
     const pattern = ensurePattern(song, i + 1);
     pattern.name = source.name;
+    // Each pattern keeps the length the FILE gave it, which is the one thing the
+    // song-level `steps` cannot say: a verse of sixteen and a chorus of
+    // thirty-two is a song, and flattening both to `steps` would drop the chorus's
+    // second half without a word. Reading is where that happened, not writing —
+    // the file has always held a row list per pattern.
+    if (source.cells.length !== pattern.steps.length) setPatternLength(song, i, source.cells.length);
     source.cells.forEach((row, r) => {
       row.forEach((source_, c) => {
         const cell = pattern.steps[r]?.[c];
@@ -2069,8 +2387,14 @@ export function songFromJson(text: string): SongFileParse {
         // consistent: a chord is a list, a single note is a list of one, and an
         // absent step is an empty list. A DRUM goes through its own writer, which
         // is what puts the kit's pitch on the cell and takes any chord off it.
-        if (source_ && source_.drum !== null) setCellDrum(cell, source_.drum);
-        else setCellNotes(cell, source_ ? [source_.note, ...source_.extra] : []);
+        // A STOP is the fourth case, and the reason it is checked FIRST: it is
+        // the only cell with no pitch at all, so falling through to the note
+        // writer would silently empty the step a file had said should silence a
+        // channel — the exact loss file version 47 exists to prevent.
+        const stop = source_ ? cellStop(source_) : null;
+        if (stop !== null) setCellStop(cell, stop);
+        else if (source_ && source_.drum !== null) setCellDrum(cell, source_.drum);
+        else setCellNotes(cell, source_ && source_.note !== null ? [source_.note, ...source_.extra] : []);
         // The velocity travels on the note, so a step with no note keeps the
         // default rather than a stray value from a file that meant nothing by it.
         // How it is played travels with it, for the same reason.
@@ -2080,6 +2404,19 @@ export function songFromJson(text: string): SongFileParse {
           cell.stutter = clampStutter(source_.stutter);
           cell.grace = clampGrace(source_.grace);
           cell.bend = clampBend(source_.bend);
+          // And WHEN it lands. Written only when the file pushed the hit, so a
+          // cell on the step keeps the `undefined` that means "on the step" —
+          // this copy is field by field, which is exactly why the fourth slot
+          // needed a line here and not just a reader.
+          if (source_.late !== undefined && source_.late > 0) cell.late = clampLate(source_.late);
+          // And WHERE IN ITS SAMPLE it begins. Same rule, one slot along: written
+          // only when the file asked, so a cell on the sample's own start stays
+          // undefined rather than pinned to zero.
+          if (source_.start !== undefined && source_.start > 0) cell.start = Math.round(startFraction(source_.start) * 100);
+          // And which way it leans, written only when the file leaned it.
+          if (source_.pan !== undefined && clampPan(source_.pan) !== 0) cell.pan = clampPan(source_.pan);
+          // And how it leaves, written only when the file faded it.
+          if (source_.fade !== undefined && clampFade(source_.fade) > 0) cell.fade = clampFade(source_.fade);
         }
       });
     });
@@ -2376,6 +2713,27 @@ interface JsonTrack {
    */
   sample: string | null;
   /**
+   * The KEYMAP: which recording plays from which note upward. Empty when the file
+   * has none, which is the one-recording channel every earlier file wrote.
+   *
+   * REFERENCES, like `sample` itself and deliberately not resolved: the bank is the
+   * app's, so a zone naming a file this machine lacks plays the channel's own
+   * recording in that register rather than costing the song.
+   */
+  zones: KeyZone[];
+  /**
+   * The channel's SLICES: the pieces its recording was chopped into, in time
+   * order. Empty when the file has none, which is the whole-recording channel
+   * every earlier file wrote.
+   */
+  slices: Slice[];
+  /**
+   * The channel's own WAVETABLE, or null for the chip bank. See
+   * `model/wavetable.ts` — a spectrum the author wrote, worn by a `wave table`
+   * voice instead of the entry its `duty` picks.
+   */
+  table: WaveTable | null;
+  /**
    * The plugin instrument this channel names, or `null` for its built-in sound.
    *
    * A REFERENCE, deliberately NOT looked up against anything: the plugin library
@@ -2408,7 +2766,17 @@ interface JsonTrack {
 
 /** One step of a JSON grid, already range-checked and velocity-resolved. */
 interface JsonCell {
-  note: number;
+  /**
+   * The cell's first note — or null for a STOP, the one cell with no pitch.
+   *
+   * It is the same shape the model holds, field for field, because the reader
+   * hands these straight through rather than converting them: a second shape
+   * here would be a second place a new column has to be added, and the one that
+   * got forgotten would be the one that dropped a stop on save.
+   */
+  note: number | null;
+  /** A STOP, or null for a cell that sounds something. See `Cell.gesture`. */
+  gesture: StopId | null;
   /** The rest of a chord written into one cell, or `[]`. See `Cell.extra`. */
   extra: number[];
   /** The drum this hit is, or null. The pitch above is the drum's own. */
@@ -2422,6 +2790,15 @@ interface JsonCell {
   stutter: number;
   grace: number;
   bend: number;
+  /** How late the hit lands, in ticks of its step. Absent (and 0) on the step. */
+  late?: number;
+  /** How far into its recording the hit begins, in percent. Absent (and 0) at
+   * the recording's own start. */
+  start?: number;
+  /** Where the hit sits in the field. Absent (and 0) is the centre. */
+  pan?: number;
+  /** How much of its length the hit fades through. Absent (and 0) does not. */
+  fade?: number;
 }
 
 interface JsonPattern {
@@ -2611,6 +2988,80 @@ function readTracks(value: unknown, errors: string[], buses: readonly Bus[]): Js
       }
       sample = tidySampleName(entry.sample as string);
     }
+    // The KEYMAP, read the lenient way `sample` is: a boundary naming audio this
+    // machine lacks keeps the reference and plays the channel's own recording. A
+    // MALFORMED boundary is refused, because a keymap that silently dropped one
+    // would play the wrong recording across the register it named.
+    let zones: KeyZone[] = [];
+    if (entry.zones !== undefined && entry.zones !== null) {
+      if (!Array.isArray(entry.zones)) {
+        errors.push(`${where}'s "zones" must be an array like [{"note": 60, "sample": "PIANO_HI"}].`);
+        return null;
+      }
+      if (entry.zones.length > MAX_ZONES) {
+        errors.push(`${where}'s "zones" holds ${entry.zones.length} boundaries, but a channel may hold at most ${MAX_ZONES}. Remove one and load again.`);
+        return null;
+      }
+      for (const zone of entry.zones) {
+        const note = isRecord(zone) ? numberOf(zone.note) : null;
+        if (note === null || typeof zone.sample !== 'string' || sampleNameProblem(zone.sample) !== null) {
+          errors.push(`${where}'s "zones" entries are {"note", "sample"} pairs, e.g. {"note": 60, "sample": "PIANO_HI"}; got ${JSON.stringify(zone)}.`);
+          return null;
+        }
+        zones.push({ note: clampZoneNote(note), sample: tidySampleName(zone.sample) });
+      }
+      zones = tidyZones(zones);
+    }
+    // The SLICES, read the way every other list here is: absent is the whole
+    // recording, and a malformed piece is refused rather than dropped, because a
+    // chop that silently lost a piece would play the wrong audio on that note.
+    let slices: Slice[] = [];
+    if (entry.slices !== undefined && entry.slices !== null) {
+      if (!Array.isArray(entry.slices)) {
+        errors.push(`${where}'s "slices" must be an array like [{"start": 0, "end": 0.42}].`);
+        return null;
+      }
+      if (entry.slices.length > MAX_SLICES) {
+        errors.push(`${where}'s "slices" holds ${entry.slices.length} pieces, but a channel may hold at most ${MAX_SLICES}.`);
+        return null;
+      }
+      for (const piece of entry.slices) {
+        const start = isRecord(piece) ? numberOf(piece.start) : null;
+        const end = isRecord(piece) ? numberOf(piece.end) : null;
+        if (start === null || end === null) {
+          errors.push(`${where}'s "slices" entries are {"start", "end"} pairs in seconds, e.g. {"start": 0, "end": 0.42}; got ${JSON.stringify(piece)}.`);
+          return null;
+        }
+        slices.push(clampSlice(start, end));
+      }
+      slices = tidySlices(slices);
+    }
+    // The channel's own TABLE, if it has one. A table with no fundamental is
+    // silence wearing a name, so it is refused rather than stored: a file that
+    // said `{"name": "HOLLOW", "harmonics": [0]}` would play nothing and say
+    // nothing about why.
+    let table: WaveTable | null = null;
+    if (entry.table !== undefined && entry.table !== null) {
+      if (!isRecord(entry.table) || typeof entry.table.name !== 'string' || !Array.isArray(entry.table.harmonics)) {
+        errors.push(`${where}'s "table" must be {"name", "harmonics"}, e.g. {"name": "ODD", "harmonics": [1, 0, 0.5]}.`);
+        return null;
+      }
+      const harmonics: number[] = [];
+      for (const value of entry.table.harmonics) {
+        const amount = numberOf(value);
+        if (amount === null) {
+          errors.push(`${where}'s table "${entry.table.name}" lists harmonics as numbers, e.g. [1, 0, 0.5]; got ${JSON.stringify(value)}.`);
+          return null;
+        }
+        harmonics.push(clampHarmonic(amount));
+      }
+      const read = tidyTable(entry.table.name as string, harmonics);
+      if (read === null) {
+        errors.push(`${where}'s "table" needs a one-word name of up to ${MAX_TABLE_NAME} characters and at least one non-zero harmonic.`);
+        return null;
+      }
+      table = read;
+    }
     // Which plugin instrument the channel names. Optional, absent on every file
     // written before one could be named, and checked for SPELLING and not
     // against a list — the sample's reason exactly: the plugin library is the
@@ -2721,7 +3172,7 @@ function readTracks(value: unknown, errors: string[], buses: readonly Bus[]): Js
       touch: clampTouch(touch ?? DEFAULT_TOUCH),
       drift: clampDrift(drift ?? DEFAULT_DRIFT),
       verb: clampSend(verb), echo: clampSend(echo), duck: clampDuck(duck), effects,
-      groove, humanize: clampHumanize(humanize), poly: clampPoly(poly), sample, plugin, fx, pluginParams,
+      groove, humanize: clampHumanize(humanize), poly: clampPoly(poly), sample, zones, slices, table, plugin, fx, pluginParams,
       shape: isFilterShape(shape) ? shape : DEFAULT_SHAPE,
       bus,
     });
@@ -2933,8 +3384,16 @@ function readAutomation(value: unknown, channels: number, errors: string[]): Aut
       errors.push(`${where} needs "bars": [first, last], e.g. "bars": [8, 15].`);
       return [];
     }
-    const startBar = clampAutomationBar(bars[0]);
-    const endBar = clampAutomationBar(bars[1]);
+    const clockField = entry.clock;
+    if (clockField !== undefined && clockField !== 'bars' && clockField !== 'note') {
+      errors.push(`${where} needs a "clock" of "bars" (the song's bars) or "note" (steps since each hit); got ${JSON.stringify(clockField)}.`);
+      return [];
+    }
+    // On the note clock those two numbers are STEPS SINCE A HIT, so they are
+    // clamped to what a note can be long rather than to the song's length.
+    const noteClock = clockField === 'note';
+    const startBar = noteClock ? clampNoteClockStep(bars[0]) : clampAutomationBar(bars[0]);
+    const endBar = noteClock ? clampNoteClockStep(bars[1]) : clampAutomationBar(bars[1]);
     if (endBar < startBar) {
       errors.push(`${where} runs backwards: "bars": [${startBar}, ${endBar}] ends before it starts.`);
       return [];
@@ -2952,6 +3411,7 @@ function readAutomation(value: unknown, channels: number, errors: string[]): Aut
       to,
       startBar,
       endBar,
+      ...(noteClock ? { clock: 'note' as const } : {}),
     }));
   }
   return sortAutomationLanes(out);
@@ -3339,8 +3799,8 @@ function readPatterns(value: unknown, errors: string[]): JsonPattern[] | null {
         let articulation = { ...NO_ARTICULATION };
         let extra: number[] = [];
         if (Array.isArray(raw)) {
-          if (raw.length !== 2 && raw.length !== 3) {
-            errors.push(`${where}, step ${r}, channel ${c + 1}: a note is written as a number, [note, velocity] or [note, velocity, articulation]; got ${JSON.stringify(raw)}.`);
+          if (raw.length < 2 || raw.length > 7) {
+            errors.push(`${where}, step ${r}, channel ${c + 1}: a note is written as a number, [note, velocity], [note, velocity, articulation], [note, velocity, articulation, late], or one more slot for how far into the sample it starts; got ${JSON.stringify(raw)}.`);
             if (errors.length >= MAX_ERRORS) return null;
             line.push(null);
             continue;
@@ -3354,7 +3814,7 @@ function readPatterns(value: unknown, errors: string[]): JsonPattern[] | null {
             continue;
           }
           velocity = clampVelocity(amount);
-          if (raw.length === 3) {
+          if (raw.length >= 3) {
             // The articulation is a NAME rather than a number or a flag, for the
             // reason `groove` and `shape` are: an unknown one is REFUSED with the
             // list rather than dropped, because a note that asked to slide and
@@ -3377,6 +3837,22 @@ function readPatterns(value: unknown, errors: string[]): JsonPattern[] | null {
         // dropped drum is a beat with a hole in it).
         let drum: DrumId | null = null;
         if (typeof note === 'string') {
+          // A STOP: `["off"]`. One element, because a stop takes no force —
+          // `["off", 80]` is a step asking to be both a command and a note, and
+          // the file says so rather than picking one of the two.
+          const stop = stopFromName(note);
+          if (stop !== null) {
+            if (Array.isArray(raw) && raw.length > 1) {
+              errors.push(`${where}, step ${r}, channel ${c + 1}: a stop takes nothing after it — write ["${note}"].`);
+              if (errors.length >= MAX_ERRORS) return null;
+              line.push(null);
+              continue;
+            }
+            const stopped = emptyCell();
+            stopped.gesture = stop;
+            line.push(stopped);
+            continue;
+          }
           const id = drumFromName(note);
           if (id === null) {
             errors.push(`${where}, step ${r}, channel ${c + 1}: "${note}" is not a drum. The kit is ${drumNames().join(', ')}.`);
@@ -3410,7 +3886,62 @@ function readPatterns(value: unknown, errors: string[]): JsonPattern[] | null {
           line.push(null);
           continue;
         }
-        line.push({ note, extra, drum, velocity, slide: articulation.slide, stutter: articulation.stutter, grace: articulation.grace, bend: articulation.bend });
+        // No `gesture` here: a stop left through the branch above, so every cell
+        // that reaches this line is a note, a chord or a drum.
+        // A LATE hit carries one more slot after the articulation. Refused rather
+        // than clamped when it is not a number: a push is a musical decision, and
+        // `"late": "a bit"` meant something this format cannot guess at.
+        let late = 0;
+        if (Array.isArray(raw) && raw.length >= 4) {
+          const ticks = numberOf(raw[3]);
+          if (ticks === null) {
+            errors.push(`${where}, step ${r}, channel ${c + 1}: the fourth slot is how many ticks late the hit lands (0..${MAX_LATE}); got ${JSON.stringify(raw[3])}.`);
+            if (errors.length >= MAX_ERRORS) return null;
+            line.push(null);
+            continue;
+          }
+          late = clampLate(ticks);
+        }
+        // And where in the sample it begins, as the fifth slot: a percentage of
+        // the window the note plays. Refused when it is not a number, for `late`'s
+        // reason — "quite far in" is not something this format can guess at.
+        let start = 0;
+        if (Array.isArray(raw) && raw.length >= 5) {
+          const percent = numberOf(raw[4]);
+          if (percent === null) {
+            errors.push(`${where}, step ${r}, channel ${c + 1}: the fifth slot is how far into the sample the hit begins, as a percentage 0..${MAX_START}; got ${JSON.stringify(raw[4])}.`);
+            if (errors.length >= MAX_ERRORS) return null;
+            line.push(null);
+            continue;
+          }
+          start = Math.round(startFraction(percent) * 100);
+        }
+        // And where it sits in the field, as the sixth slot. Clamped rather than
+        // refused: 1000 meant "as far left as it goes", the mixer's own bargain.
+        let pan = 0;
+        if (Array.isArray(raw) && raw.length >= 6) {
+          const side = numberOf(raw[5]);
+          if (side === null) {
+            errors.push(`${where}, step ${r}, channel ${c + 1}: the sixth slot is where the hit sits, -100 (left) .. 100 (right); got ${JSON.stringify(raw[5])}.`);
+            if (errors.length >= MAX_ERRORS) return null;
+            line.push(null);
+            continue;
+          }
+          pan = clampPan(side);
+        }
+        // And how much of the note it fades through, as the seventh slot.
+        let fade = 0;
+        if (Array.isArray(raw) && raw.length === 7) {
+          const percent = numberOf(raw[6]);
+          if (percent === null) {
+            errors.push(`${where}, step ${r}, channel ${c + 1}: the seventh slot is how much of the note it fades through, as a percentage 1..${MAX_FADE}; got ${JSON.stringify(raw[6])}.`);
+            if (errors.length >= MAX_ERRORS) return null;
+            line.push(null);
+            continue;
+          }
+          fade = clampFade(percent);
+        }
+        line.push({ note, gesture: null, extra, drum, velocity, slide: articulation.slide, stutter: articulation.stutter, grace: articulation.grace, bend: articulation.bend, late, start, pan, fade });
       }
       cells.push(line);
     }

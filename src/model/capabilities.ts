@@ -107,6 +107,8 @@ import {
   MIN_OCTAVE_SHIFT,
   MIN_ROLL_HITS,
   MIN_ROW_REPEAT,
+  MAX_TRANSPOSE,
+  MIN_TRANSPOSE,
   ROW_TRANSFORMS,
 } from './rows';
 import { LAYER_FIELDS, MAX_EXTRA_LAYERS, MAX_LAYERS, MAX_USER_VOICES } from './instrument';
@@ -153,6 +155,7 @@ import {
   MIN_VELOCITY,
   CELL_NOTE_SEPARATOR,
   MAX_CELL_NOTES,
+  STOP_WORDS,
 } from './song';
 import { SCRIPT_DOC_PATH, SCRIPT_KEYWORDS, SCRIPT_OCTAVE_MAX, SCRIPT_OCTAVE_MIN } from './script';
 import { SONG_FILE_VERSION, SONG_FILE_VERSION_MAX, STACK_SONG_FILE_VERSION } from './songfile';
@@ -511,10 +514,29 @@ import { MAX_PARAM, MAX_VOICE_NAME, MIN_PARAM, VOICE_PARAMS, VOICES, WAVES } fro
  * `robin 0`/`touch 0` are what every song written before this means — so the two
  * settings add a file version (34) but move no note on their own.
  */
-export const SCRIPT_VERSION = 56;
+export const SCRIPT_VERSION = 75;
 
 /** What each language version added, oldest first. Printed by tooling, not a user. */
 export const SCRIPT_VERSION_NOTES: readonly { version: number; note: string }[] = [
+  { version: 75, note: 'PER-PATTERN LENGTH: `steps 32 pattern 3` gives ONE pattern its own grid length, leaving its neighbours alone \u2014 a sixteen-step verse and a thirty-two-step chorus in one song. The same `steps` word, a narrower scope, and no new keyword. The grid, editor, piano roll and MIDI export already read each pattern\'s own row count, so the only thing missing was a way to WRITE one: `steps N` still resizes the whole song. A song whose patterns differ writes file version 58, because a build that says 74 flattens every pattern to the song\'s length when it reads.' },
+  { version: 74, note: 'SIXTEEN CHANNELS: `tracks N` now takes 1..16 (was 1..8), which is two banks of eight. No new word \u2014 every `track N` line, grid column, mixer fader, automation lane and `scene` slot follows from the count \u2014 but a song that passes eight channels writes file version 57, because a build that says 73 reads the ninth channel and saves it back away. The tracker shows one bank of eight at a time and the cursor brings its bank with it, so a sixteen-channel song keeps the cell width an eight-channel one had.' },
+  { version: 73, note: 'CREDITS: `credits "MADE BY ME \u2014 break from a 1972 record"` writes who made the song and what it borrows, as free text (up to 200 characters), and `credits clear` takes it off. SONG data rather than app state, for the pack\u2019s reason: a bundle exists so a song arrives complete, and who did it, and whose break is in it, is part of what a person hands over. It is written into the `.json`, carried by `pack save` without any new machinery, and read back as the same line; a song that names none is byte-identical to the file it was. A song holding one writes file version 56' },
+  { version: 72, note: 'THE SUFFIX SPELLING: `C-4:late2` writes the note AND its push in one token, and `hat:pan-30:seek25` carries two clauses, so a grid row can say what a step does without a `push`/`pose` line per cell. The names are the STATEMENTS\' own words (late, seek, pan, fade) with the same ranges, and they expand into those statements \u2014 one writer, so the two spellings cannot disagree. A clause after a colon is stripped before the note tokeniser runs, which is why `C-4>*3:late2` still reads the gesture exactly as it did; an unknown clause, or a number outside its range, is refused by name rather than played plainly' },
+  { version: 71, note: 'THE RUN FROM THE CELL: `arp write 0 1 *` arpeggiates the chord already written in pattern row 0 channel 1, using the dials `arp direction/octaves/rate/gate/mode` store \u2014 no star, no chord, because the chord is the one on the grid. It exists so a triad does not have to be spelled TWICE (once into the cell, once on the `arp` line) and then drift: what you can see is what expands. Same writer as `arp write 0 1 Am`, so the two spellings land identical cells; an empty or stopped cell is a no-op rather than a hole' },
+  { version: 70, note: 'A NOTE THAT FADES: `fade 1 1 2 40` has pattern 1\u2019s row 1 on channel 2 fall away through the last four tenths of its own length, silent at the end. A fade rather than a shorter `hold`, because the two answer different questions: shortening the hold CUTS a note off, and this lets it fall. It is applied to the whole voice as a stage of its own \u2014 so it works on a SAMPLE as well as a synth, which is what a looped pad or a one-shot break needs, since neither knows the note is supposed to be over \u2014 and it stacks with `pan` in the order the signal meets them. A span works as on `push`, `fade \u2026 0` keeps the note\u2019s own envelope, and a song holding one writes file version 55' },
+  { version: 69, note: 'A HIT THAT SITS OFF CENTRE: `pan 1 1 2 -30` puts pattern 1\u2019s row 1 on channel 2 left of centre, -100 hard left to 100 hard right, where 0 is the channel\u2019s own place. Relative rather than absolute because the MIXER still owns the channel: a kit panned left stays left, and one hat inside it can lean further. A hat and a snare come off one channel and belong in different places, which is the per-note field this exists for, and a span works like `push`\u2019s (`pan 1 1-4 2 30`). The hit gets a stereo stage of its own, so a song that never pans carries the same audio graph it always did. A song holding one writes file version 54' },
+  { version: 68, note: 'A HIT THAT SEEKS: `seek 1 1 2 25` begins pattern 1\u2019s row 1 on channel 2 a QUARTER of the way into its sample, skipping the attack \u2014 the clause that turns a long recording into several sounds without cutting it. The percentage is of the WINDOW the note already plays (a slice\u2019s piece, a take\u2019s trim), so a chopped break seeks inside the piece rather than into the one next door, and it is a percentage rather than seconds so a quarter is a quarter of any file. `seek 1 1 2 0` begins at the start. 0..95: past that what is left is a click, not an attack. A song holding one writes file version 53' },
+  { version: 67, note: 'A HIT THAT LANDS LATE: `push 1 1 2 2` puts pattern 1\u2019s row 1 on channel 2 two ticks behind its step, where a tick is a SIXTH of a step \u2014 so a snare sits behind the beat, a bass note leans back, and a groove that was too stiff can be loosened one hit at a time. `push 1 1 2 0` puts it back on the step. Four numbers because a cell is named by where it IS: there is no current row in a script, and inventing one would make a push depend on the line above it. It is a statement rather than a suffix (`C-4:late2`) so the note tokeniser keeps saying one thing, and the cell stores it so a re-pitch or a re-velocity keeps the push. 0..3 ticks: past that a hit is closer to the next step than its own. A song holding one writes file version 52' },
+  { version: 66, note: 'A WAVETABLE OF YOUR OWN: `table 1 ODD 1 0 0.5` gives channel 1 a spectrum from the fundamental upward, which its `wave table` voice wears instead of the bank entry its `duty` picks \u2014 so the one sound that used to be a fixed bank is now a set of numbers like every other one. Harmonics are -1..1, up to 16 of them, and a spectrum of zeroes is refused rather than stored (it is silence with a name). `table 1 clear` wears the bank again. It lives on the CHANNEL rather than in a song-wide library, for a voice\u2019s reason: a table is the sound of the thing that plays it. A channel with a table writes file version 51' },
+  { version: 65, note: 'SLICES: `slice 1 0 0.42` marks one piece of a channel\u2019s recording, in the recording\u2019s own SECONDS (so a chop point does not move when the tempo does). On a sliced channel the note number picks the piece \u2014 C-4 is the first, C#-4 the second \u2014 which is how a chopped break becomes an instrument instead of eight loaded files; a piece ends where the chop says, so the next one is not smeared over by the tail. `slice 1 clear` plays the whole recording again. A sliced song writes file version 50, because an older build would play the recording whole from every note' },
+  { version: 64, note: 'KEYZONES: `zone 1 C-4 PIANO_HI` says which recording a channel plays from a note upward — one boundary per line, so a keyboard reads as a list of sentences and two lines in any order mean the same map. The lowest zone owns everything BELOW it too, and the channel\u2019s own `sample` is the floor under the map: it plays when there is no map, or when a zone names a file this machine does not have, so a keymap never silences a note. `zone 1 clear` empties it. A keymap writes file version 49, because an older build would play every register from the channel\u2019s one recording, which is a different instrument' },
+  { version: 63, note: 'the note clock reaches a SECOND TARGET: `automate 2 bright 90 20 note 0 to 6` walks a channel\u2019s brightness across each note\u2019s own filter, point by point, so a per-note filter envelope is a line rather than a section. No new syntax \u2014 `note` was already a word on the statement \u2014 so every script a version-62 tool writes still applies; what such a tool gets is a REFUSAL it can now do without, which is why the version moved rather than the file (no file version changes: the lane was already storable). A brightness lane replaces the note\u2019s `sweep` envelope, because both claim the one cutoff' },
+  { version: 62, note: 'A SECOND CLOCK FOR AUTOMATION: `automate 2 level 90 20 note 0 to 6` counts STEPS SINCE EACH HIT instead of bars of the order, so one lane is an envelope every note on the channel plays — a sixteen-note bassline gets a sweep per note rather than one per section. `bars` and `note` are one word apart on the statement that already exists, so every existing lane applies unchanged and a build that says 61 refuses a `note` range. Only `level` can ride it: a level is rewritten on every step, where a knob is read once when the note begins, and the refusal says so. A lane on the note clock writes file version 48' },
+  { version: 61, note: 'THE PACK: `pack save` writes one file holding the song, every sample it names (as a `.wav`) and every plugin it pinned — the same bundle the FILE menu writes, so a song an agent builds with a chopped break arrives with the break instead of with silence. A side effect on the file system rather than song data, so it travels out in `ScriptSettings` as a one-shot flag and no file carries it; there is no `pack load`, because a path is not a path in a browser, and opening a pack is a click the file menu already offers. A build that says 60 refuses a `pack` line' },
+  { version: 60, note: 'the EDIT STEP, as a word: `advance 2` writes a note and leaves the cursor two rows down (0..8, and 0 stays on the row, so a chord or a fill is typed into one step). A SESSION setting like `octave` \u2014 it says how you are TYPING rather than what the song is \u2014 so it travels out in `ScriptSettings`, no file carries it, and a build that says 59 refuses an `advance` line' },
+  { version: 59, note: 'THREE MORE THINGS A RANGE CAN DO: `rows A to B transpose N` moves a run by semitones (signed, \u00b148, never 0 — `octave up` is twelve of these and the two share one function), `rows A to B fill` keeps the note at the top of the run playing down its empty steps, and `rows A to B interpolate` writes the empty steps between the run\u2019s first and last note so a figure glides. No new statement and no field changed shape: they are three more values on the `rows` line a version-58 tool already writes, so every existing script applies unchanged and a tool that predates them simply cannot ask for them. They write ordinary cells, so no file version moves' },
+  { version: 58, note: 'NOTE LIFETIME: a cell may now be a STOP — `off` releases the channel there and `cut` chokes it, written as the word a grid column already has room for (`C-4 . off .`). Before this a note rang for its channel\u2019s `hold` and the only way to end one early was to shorten the whole channel; now a pad stops on the step it says. A stop is one word where a drum\u2019s name goes, so every existing grid row still applies; what a version-57 tool gets wrong is that it cannot END a note, and `song.diff`/`cell.set` gained a "gesture" field for it. A song holding a stop writes file version 47, because a build that predates it would read the cell as empty and save it that way — the pad would ring for its whole hold and the file would have no way left to say it was meant to stop' },
+  { version: 57, note: 'WIDER ROOM: a song may now hold 256 order slots (was 64 — two minutes at the default bar, which is not a song), 128 patterns (was 64), 48 named sections (was 24) and 64 automation lanes (was 32). No word was added and no field changed shape, so every script a version-56 tool writes still applies; what such a tool gets WRONG is the ceiling — one that hardcodes 64 bars stops arranging at two minutes, and the song it declines to write is one this build would have played. A longer song is the same file, just longer, so the file format stands' },
   { version: 56, note: 'the PARAMS statement: `params 1 cutoff 70` turns one knob of the channel\u2019s plugin instrument toward the value (0..100), `params 1 <knob> clear` takes one knob back to its manifest default and `params 1 clear` takes every override off — a statement of its own like `fx`, because a value is the song\u2019s and the knob is the manifest\u2019s. An id no manifest declares is kept and moves nothing, the sample\u2019s bargain one scope over; a `param.<knob>` lane (`automate 2 param.cutoff 20 90 bars 8 to 15`) moves one across bars, and a build that says 55 refuses a `params` line' },
   { version: 55, note: 'the PLUGIN word: `plugin install "https://example.com/reverb.tracklet-plugin"` fetches a plugin bundle from a URL the user approved and runs the install pipeline — remote installs are off by default, so the line IS the approval; a session setting like `sample load`, so no file carries one, and a build that says 54 refuses a `plugin` line' },
   { version: 54, note: 'the PLUGIN PANEL on the `page` word: `page plugin:com.example.meter-panel` opens a plugin\u2019s page — a DOM box over the canvas that reads the song and the theme and closes back to the tracker — spelling-checked like a voice (`voice plugin:<id>`) and resolved when it opens, so an id this machine has no code for opens the tracker with a notice rather than refusing; a session setting like every `page`, so no file carries one, and a build that says 53 refuses the reference' },
@@ -601,9 +623,11 @@ export const SCRIPT_COMMANDS: readonly CapabilityCommand[] = [
   { word: 'new', tier: 'core', what: 'start a blank song', example: 'new' },
   { word: 'start', tier: 'core', what: 'start from a whole worked skeleton of a genre — house, lofi, ballad, rock, emo, vaporwave, synthwave, shoegaze or dnb', example: 'start house' },
   { word: 'song', tier: 'core', what: 'the song\u2019s title, which shows in the top bar', example: 'song "MY TUNE"' },
+  { word: 'credits', tier: 'core', what: 'who made the song and what it borrows, as free text that travels with it — into the file, into a pack, and out again as the same line (`credits clear` takes it off)', example: 'credits "MADE BY ME — break from a 1972 record"' },
   { word: 'key', tier: 'core', what: 'the key and scale the chord tools and the piano follow', example: 'key D minor' },
   { word: 'tempo', tier: 'core', what: 'how fast it goes, and tempo changes by bar', example: 'tempo 140' },
   { word: 'octave', tier: 'core', what: 'which octave a bare note letter means', example: 'octave 5' },
+  { word: 'advance', tier: 'core', what: 'how many rows the cursor steps down after a note — 0..8, 0 stays on the row', example: 'advance 2' },
   { word: 'beat', tier: 'core', what: 'how many steps are one beat', example: 'beat 4' },
   { word: 'steps', tier: 'core', what: 'how many steps a pattern holds', example: 'steps 16' },
   { word: 'grid', tier: 'core', what: 'the bar as note values: 16 is sixteenths, 8t is eighth-note triplets', example: 'grid 16' },
@@ -612,6 +636,13 @@ export const SCRIPT_COMMANDS: readonly CapabilityCommand[] = [
   { word: 'swing', tier: 'core', what: 'the feel: how far every second step is pushed later', example: 'swing 60' },
   { word: 'groove', tier: 'deep', what: 'a named feel that lands notes before or after the beat', example: 'groove shuffle' },
   { word: 'speed', tier: 'deep', what: 'play the whole record back at a different tape speed — one number that moves pitch and time together (100 is normal)', example: 'speed 80' },
+  { word: 'zone', tier: 'deep', what: 'one boundary of a channel\u2019s KEYMAP: from this note upward it plays THAT recording, so an instrument can be sampled in octaves instead of stretched from middle C (`zone 1 clear` empties the map; the lowest zone owns everything below it too)', example: 'zone 1 C-4 PIANO_HI' },
+  { word: 'slice', tier: 'deep', what: 'one piece of a channel\u2019s recording, in seconds: C-4 plays the first piece, C#-4 the second, so a chopped break plays like an instrument (`slice 1 clear` plays it whole again)', example: 'slice 1 0 0.42' },
+  { word: 'table', tier: 'deep', what: 'a WAVETABLE of the channel\u2019s own: a name and a spectrum from the fundamental upward (-1..1 each, up to 16), worn by its `wave table` voice instead of the bank entry `duty` picks (`table 1 clear` wears the bank again)', example: 'table 1 ODD 1 0 0.5' },
+  { word: 'push', tier: 'deep', what: 'one cell that lands BEHIND its step: pattern, row, channel, then ticks (a sixth of a step, 0..3), so a snare can sit behind the beat and `push … 0` puts it back on it', example: 'push 1 1 2 2' },
+  { word: 'seek', tier: 'deep', what: 'one cell begun PARTWAY into its sample: pattern, row, channel, then a percentage (0..95), so a long recording becomes several sounds without being cut \u2014 measured inside the window the note already plays, `seek … 0` begins at the start', example: 'seek 1 1 2 25' },
+  { word: 'pan', tier: 'deep', what: 'which way ONE hit leans: pattern, row, channel, then -100 (hard left) .. 100 (hard right), relative to the channel so the mixer still owns the strip; 0 is the centre and a row span works as it does on `push`', example: 'pan 1 1 2 -30' },
+  { word: 'fade', tier: 'deep', what: 'how much of ONE note\u2019s own length it falls away through: pattern, row, channel, then a percentage (1..100, 0 for none), applied to the whole voice so it works on samples too — a span works as on `push`', example: 'fade 1 1 2 40' },
   { word: 'kit', tier: 'deep', what: 'which four patches the drum hits play: the four built-in kits (studio, 808, brush, rock) or the name of a kit of your own saved as a .kit.json', example: 'kit 808' },
   { word: 'machine', tier: 'deep', what: 'set up the DRUM MACHINE — a whole instrument of pads and a step grid beside the channels, with its own level, pan, swing, sends, duck and effects; `pads N` and `bars N` say how many pads and bars it has', example: 'machine level 85 swing 50 pads 6 bars 2' },
   { word: 'pad', tier: 'core', what: 'one lane of the drum machine: a name, a sound, a level and pan, the recording it names (with `sample NAME`, on a `wave sample` pad), and a row of hits written as a pattern string (`.` a rest, `1`-`9` how hard)', example: 'pad 1 KICK voice kick pattern "9...9...9...9..."' },
@@ -631,7 +662,8 @@ export const SCRIPT_COMMANDS: readonly CapabilityCommand[] = [
   { word: 'solo', tier: 'deep', what: 'listen to some channels only, without changing the song', example: 'solo 1' },
   { word: 'chords', tier: 'deep', what: 'what one key writes: single notes, a triad or a seventh', example: 'chords triad' },
   { word: 'hear', tier: 'deep', what: 'whether notes are auditioned as the cursor reaches them', example: 'hear on' },
-  { word: 'export', tier: 'deep', what: 'what an audio export covers: which bars it renders — `export bars 8 to 15`, the loop region — and how loud it arrives, normalised to a LUFS target (`export loud -14`). Both are session settings rather than song data, and `export all` and `export loud off` put each back', example: 'export bars 1 to 2 loud -14' },
+  { word: 'export', tier: 'deep', what: 'what an audio export covers: which bars it renders and playback loops — `export bars 8 to 15`, the loop region — and how loud it arrives, normalised to a LUFS target (`export loud -14`). Both are session settings rather than song data, and `export all` and `export loud off` put each back', example: 'export bars 1 to 2 loud -14' },
+  { word: 'pack', tier: 'deep', what: 'write the song as ONE file holding its samples and the plugin versions it pinned — what you hand somebody so it plays rather than falls back', example: 'pack save' },
   { word: 'page', tier: 'deep', what: 'which full screen the app is showing — tracker, machine, mixer, arranger, live, recorder, or `page plugin:<id>` for a plugin panel — so one script can drive the tabs it just wrote into; a session setting, so no file carries it', example: 'page arranger' },
   { word: 'live', tier: 'deep', what: 'how a launch lands: `live quantize N` waits for the next N bars before a launched scene takes over (0 is immediate); a session setting, so no file carries it', example: 'live quantize 4' },
   { word: 'tracks', tier: 'core', what: 'how many channels the song has', example: 'tracks 5' },
@@ -734,7 +766,13 @@ export interface CapabilityLimits {
    * repeat's CEILING is not here because it is not a number — a repeat has to FIT
    * in the pattern, so the arithmetic decides it.
    */
-  rows: { octaves: { min: number; max: number }; repeat: { min: number }; roll: { min: number; max: number } };
+  rows: {
+    octaves: { min: number; max: number };
+    repeat: { min: number };
+    roll: { min: number; max: number };
+    /** How far one `transpose` moves a range, in semitones, and that 0 is not it. */
+    transpose: { min: number; max: number };
+  };
   /**
    * How many notes ONE CELL may hold: the ceiling on a chord written with commas.
    *
@@ -911,6 +949,14 @@ export interface CapabilityVocabulary {
    */
   drums: readonly { id: string; label: string; pitch: number; short: string; blurb: string }[];
   /**
+   * The two STOPS a step can be: the word a grid row and a file write (`off`),
+   * the id the model holds, and the three characters the grid prints (`OFF`).
+   *
+   * Published for the drum's reason — a tool writing a song needs the word that
+   * ends a note, and there is no range it could guess it from.
+   */
+  stops: readonly { id: string; word: string; label: string }[];
+  /**
    * The directions an `arp` walks a chord in: `up`, `down` or `updown`, with the
    * aliases a person types (`asc`, `descending`, `both`). A chord MODIFIER rather
    * than a command, published because a tool writing one has to know the words.
@@ -1053,6 +1099,7 @@ export function scriptCapabilities(): ScriptCapabilities {
       drift: { min: DRIFT_MIN, max: DRIFT_MAX },
       rows: {
         octaves: { min: MIN_OCTAVE_SHIFT, max: MAX_OCTAVE_SHIFT },
+        transpose: { min: MIN_TRANSPOSE, max: MAX_TRANSPOSE },
         repeat: { min: MIN_ROW_REPEAT },
         roll: { min: MIN_ROLL_HITS, max: MAX_ROLL_HITS },
       },
@@ -1144,6 +1191,9 @@ export function scriptCapabilities(): ScriptCapabilities {
       drums: DRUMS.map((drum) => ({
         id: drum.id, label: drum.label, pitch: drum.pitch, short: drum.short, blurb: drum.blurb,
       })),
+      // The stops, one list over: a step that ends a note rather than starting
+      // one, with the word the script writes and the label the grid shows.
+      stops: STOP_WORDS.map((stop) => ({ id: stop.id, word: stop.word, label: stop.label })),
       // Each direction with the words that also read as it, worked out by asking
       // the reader rather than by listing them twice — the same table the parser
       // consults, so the two cannot drift.
